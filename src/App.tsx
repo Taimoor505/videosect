@@ -189,7 +189,7 @@ export default function App() {
             className="hover:text-slate-900 transition-colors font-medium flex items-center gap-1"
           >
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            <span>14 Tests Passed</span>
+            <span>16 Tests Passed</span>
           </button>
         </div>
       </footer>

@@ -234,6 +234,21 @@ export const OverviewTimeline: React.FC<OverviewTimelineProps> = ({
                 <span className="text-slate-500">Speech Isolation:</span>
                 <span className="text-slate-900">voice.wav (vocals) · music.wav (backing)</span>
               </div>
+              <div className="flex items-start justify-between text-xs">
+                <span className="text-slate-500">Clipping Engine:</span>
+                <span className="font-mono text-slate-900">
+                  {project.scenesData.clipping_settings?.detector_mode || 'ensemble'} ·{' '}
+                  {project.scenesData.clipping_settings?.snap_to_speech !== false ? 'Speech-Snapped' : 'Raw Cut'}
+                </span>
+              </div>
+              <div className="flex items-start justify-between text-xs">
+                <span className="text-slate-500">Watermark Filter:</span>
+                <span className="font-mono text-slate-900">
+                  {project.scenesData.watermark_removed
+                    ? `Removed (${project.scenesData.watermark_removed.mode}: ${project.scenesData.watermark_removed.w}×${project.scenesData.watermark_removed.h})`
+                    : 'None / Subtitles Preserved'}
+                </span>
+              </div>
             </div>
 
             {/* Spoken Text Box for Active Scene */}

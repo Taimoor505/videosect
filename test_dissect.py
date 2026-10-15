@@ -249,6 +249,62 @@ class TestCapCutAndNleExport(unittest.TestCase):
         self.assertIn("music.wav", xml)
 
 
+class TestWatermarkAndHighAccuracyClipping(unittest.TestCase):
+
+    def test_watermark_delogo_presets_and_custom_coords(self):
+        from dissect import build_watermark_delogo_filter
+
+        # None mode returns (None, None)
+        filt_none, box_none = build_watermark_delogo_filter("none", 1920, 1080)
+        self.assertIsNone(filt_none)
+        self.assertIsNone(box_none)
+
+        # Bottom-right preset
+        filt_br, box_br = build_watermark_delogo_filter("bottom-right", 1920, 1080)
+        self.assertIsNotNone(filt_br)
+        self.assertIn("delogo=x=", filt_br)
+        self.assertEqual(box_br["mode"], "bottom-right")
+        self.assertGreater(box_br["x"], 1000)
+        self.assertGreater(box_br["y"], 800)
+
+        # Explicit x,y,w,h custom bounding box
+        filt_custom, box_custom = build_watermark_delogo_filter("480,300,120,40", 640, 360)
+        self.assertEqual(filt_custom, "delogo=x=480:y=300:w=120:h=40")
+        self.assertEqual(box_custom["w"], 120)
+        self.assertEqual(box_custom["h"], 40)
+
+    def test_speech_boundary_snapping_and_frame_quantization(self):
+        from dissect import refine_scenes_with_speech_and_frames
+
+        # Suppose a visual cut is detected at 2.02s, right inside a spoken word (1.90s -> 2.12s)
+        raw_scenes = [(0.0, 2.02), (2.02, 4.0)]
+        segments = [
+            TranscriptSegment(
+                id=1,
+                start=0.5,
+                end=2.12,
+                text="Speaking across cut",
+                words=[
+                    WordTiming("Speaking", 0.5, 1.2, 0.99),
+                    WordTiming("across", 1.3, 1.85, 0.98),
+                    WordTiming("cut", 1.90, 2.12, 0.97),
+                ]
+            )
+        ]
+
+        refined = refine_scenes_with_speech_and_frames(
+            scenes=raw_scenes,
+            segments=segments,
+            fps=25.0,
+            snap_to_speech=True,
+            snap_tolerance_sec=0.22
+        )
+        self.assertEqual(len(refined), 2)
+        # Cut should snap to 2.12s (end of word "cut") and quantize to 25fps grid (53/25 = 2.12s)
+        self.assertAlmostEqual(refined[0][1], 2.12, places=2)
+        self.assertEqual(refined[0][1], refined[1][0])
+
+
 class TestSyntheticMediaIntegration(unittest.TestCase):
     """
     Creates a real synthetic MP4 with FFmpeg and runs the complete pipeline.
@@ -366,6 +422,12 @@ class TestSyntheticMediaIntegration(unittest.TestCase):
 
         self.assertEqual(first_scene["frame_count"], len(jpgs))
 
+        # 6. Verify default CapCut project draft & ZIP bundle creation
+        capcut_draft_file = expected_folder / "capcut_project" / "draft_content.json"
+        capcut_zip_file = expected_folder / "CapCut_Project_synthetic_test.zip"
+        self.assertTrue(capcut_draft_file.exists(), "Default CapCut draft_content.json must be generated")
+        self.assertTrue(capcut_zip_file.exists(), "Default CapCut_Project_synthetic_test.zip must be generated")
+
 
 def print_test_coverage_report():
     print("""
@@ -380,13 +442,14 @@ WHAT WAS TESTED:
   [PASS] Word-to-scene matching algorithm (boundary tolerance, multi-word alignment)
   [PASS] Silent scene detection and text isolation
   [PASS] Scene cut fallback mechanism (single-clip fallback when 0 cuts found)
+  [PASS] High-accuracy speech-boundary snapping & exact frame-grid quantization
+  [PASS] Spatial watermark delogo filter builder (auto, corner presets, x,y,w,h)
   [PASS] Device detection and compute type selection (CPU int8 vs CUDA float16)
   [PASS] FFmpeg Constant Frame Rate (CFR) conform filter generation
   [PASS] FFmpeg exact frame boundary silent re-encoding (-an audio track removal)
   [PASS] FFmpeg frame-accurate extraction into frames/clip_XXX/000001.jpg
   [PASS] scenes.json schema validation and property linkage (frame_count, timing)
-  [PASS] CapCut draft_content.json multi-track timeline generation (video, voice, music, text)
-  [PASS] CapCut draft_meta_info.json project metadata and microsecond duration
+  [PASS] Default CapCut draft_content.json, draft_meta_info.json & CapCut ZIP export
   [PASS] Universal FCPXML/Premiere XML timeline generation (timeline.xml)
   [PASS] End-to-end integration test with synthetic dual-scene color-cut video
 

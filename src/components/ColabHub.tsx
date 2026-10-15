@@ -4,26 +4,29 @@ import { Download, Copy, Check, Terminal, Cpu, Zap, FileCode, BookOpen } from 'l
 export const ColabHub: React.FC = () => {
   const [fastMode, setFastMode] = useState(false);
   const [capcutMode, setCapcutMode] = useState(true);
+  const [detectorMode, setDetectorMode] = useState<'ensemble' | 'adaptive' | 'content'>('ensemble');
+  const [watermarkMode, setWatermarkMode] = useState<string>('auto');
   const [threshold, setThreshold] = useState(27.0);
   const [device, setDevice] = useState<'auto' | 'cuda' | 'cpu'>('auto');
   const [videoFile, setVideoFile] = useState('input.mp4');
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [copiedColab, setCopiedColab] = useState(false);
 
-  const generatedCliCmd = `python3 dissect.py ${videoFile} --threshold ${threshold.toFixed(1)}${
+  const generatedCliCmd = `python3 dissect.py ${videoFile} --detector ${detectorMode} --threshold ${threshold.toFixed(1)} --watermark ${watermarkMode}${
     fastMode ? ' --fast' : ''
-  }${capcutMode ? ' --capcut' : ''}${device !== 'auto' ? ` --device ${device}` : ''}`;
+  }${!capcutMode ? ' --no-capcut' : ''}${device !== 'auto' ? ` --device ${device}` : ''}`;
 
   const colabQuickSnippet = `# 1. Install dependencies on Google Colab (with T4 GPU):
 !apt-get update -qq && apt-get install -y -qq ffmpeg
 !pip install -q faster-whisper demucs "scenedetect[opencv]" tqdm torch torchaudio
 
-# 2. Run Dissection (Accuracy over speed: Demucs htdemucs_ft + Whisper large-v3)
-!python3 dissect.py /content/input.mp4 --threshold 27.0
+# 2. Run Dissection (High-accuracy Ensemble Clipping + Auto Watermark Removal + Default CapCut Draft)
+!python3 dissect.py /content/input.mp4 --detector ensemble --threshold 27.0 --watermark auto
 
-# 3. Zip and Download
+# 3. Download Default CapCut Project ZIP & Full Dissected Output ZIP
 import shutil
 from google.colab import files
+files.download("./output/input/CapCut_Project_input.zip")
 shutil.make_archive("output_input", "zip", root_dir="./output", base_dir="input")
 files.download("output_input.zip")`;
 
@@ -48,7 +51,7 @@ files.download("output_input.zip")`;
             Google Colab Notebook & CLI Hub
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Ready-to-run Jupyter notebook for Google Colab GPU runtime, and optimized single-command CLI for local CPU (AMD Ryzen 5600) and NVIDIA CUDA GPUs.
+            Ready-to-run Jupyter notebook for Google Colab GPU runtime (exports & downloads a CapCut project by default), plus single-command CLI for CPU (AMD Ryzen 5600) and CUDA GPUs.
           </p>
         </div>
 
@@ -89,6 +92,41 @@ files.download("output_input.zip")`;
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Scene Cut Detector Mode:
+                </label>
+                <select
+                  value={detectorMode}
+                  onChange={(e) => setDetectorMode(e.target.value as any)}
+                  className="w-full text-xs px-3 py-1.5 rounded-lg border border-slate-200 focus:outline-hidden focus:border-slate-900 bg-white"
+                >
+                  <option value="ensemble">ensemble (Adaptive+Content+Fade+Speech)</option>
+                  <option value="adaptive">adaptive (Motion & Lighting Resilient)</option>
+                  <option value="content">content (Standard HSV Detector)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Watermark Removal (`--watermark`):
+                </label>
+                <select
+                  value={watermarkMode}
+                  onChange={(e) => setWatermarkMode(e.target.value)}
+                  className="w-full text-xs px-3 py-1.5 rounded-lg border border-slate-200 focus:outline-hidden focus:border-slate-900 bg-white"
+                >
+                  <option value="auto">auto (Auto-detect corner watermark)</option>
+                  <option value="bottom-right">bottom-right</option>
+                  <option value="top-right">top-right</option>
+                  <option value="top-left">top-left</option>
+                  <option value="bottom-left">bottom-left</option>
+                  <option value="none">none (Off)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
                   Scene Cut Threshold ({threshold.toFixed(1)}):
                 </label>
                 <input
@@ -100,7 +138,7 @@ files.download("output_input.zip")`;
                   onChange={(e) => setThreshold(parseFloat(e.target.value))}
                   className="w-full accent-slate-900"
                 />
-                <span className="text-[11px] text-slate-400">Default: 27.0 (PySceneDetect)</span>
+                <span className="text-[11px] text-slate-400">Default: 27.0 (Ensemble + Speech Snapping)</span>
               </div>
 
               <div>
@@ -128,7 +166,7 @@ files.download("output_input.zip")`;
                   className="rounded text-indigo-600 focus:ring-0 w-4 h-4"
                 />
                 <span className="text-xs text-slate-800 font-medium">
-                  Enable <code className="font-mono bg-indigo-50 text-indigo-900 border border-indigo-200 px-1 py-0.5 rounded">--capcut</code> export (Generates native CapCut draft project & timeline.xml)
+                  Generate CapCut Project Bundle by default (<code className="font-mono bg-indigo-50 text-indigo-900 border border-indigo-200 px-1 py-0.5 rounded">capcut_project/</code> + <code className="font-mono bg-indigo-50 text-indigo-900 border border-indigo-200 px-1 py-0.5 rounded">CapCut_Project_*.zip</code>)
                 </span>
               </label>
 

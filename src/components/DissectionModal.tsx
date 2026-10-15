@@ -16,6 +16,10 @@ export const DissectionModal: React.FC<DissectionModalProps> = ({
   const [selectedSample, setSelectedSample] = useState('sample_videos/interview_demo.mp4');
   const [fileToUpload, setFileToUpload] = useState<File | null>(null);
   const [threshold, setThreshold] = useState('27.0');
+  const [detector, setDetector] = useState<'ensemble' | 'adaptive' | 'content'>('ensemble');
+  const [snapToSpeech, setSnapToSpeech] = useState(true);
+  const [watermarkMode, setWatermarkMode] = useState<string>('auto');
+  const [customWatermarkBox, setCustomWatermarkBox] = useState<string>('480,300,120,40');
   const [fast, setFast] = useState(false);
   const [device, setDevice] = useState<'auto' | 'cpu' | 'cuda'>('auto');
 
@@ -26,18 +30,23 @@ export const DissectionModal: React.FC<DissectionModalProps> = ({
 
   if (!isOpen) return null;
 
+  const resolvedWatermark = watermarkMode === 'custom' ? customWatermarkBox : watermarkMode;
+
   const handleStartDissection = async () => {
     setIsProcessing(true);
     setErrorMsg(null);
     setLogs('');
-    setProgressStep('Conforming video to Constant Frame Rate (CFR)...');
+    setProgressStep('Conforming video to Constant Frame Rate (CFR) & processing watermark filter...');
 
     try {
       if (sourceType === 'upload' && fileToUpload) {
-        setProgressStep('Uploading video and running dissection pipeline...');
+        setProgressStep('Uploading video and running high-accuracy dissection pipeline...');
         const formData = new FormData();
         formData.append('video', fileToUpload);
         formData.append('threshold', threshold);
+        formData.append('detector', detector);
+        formData.append('snapToSpeech', String(snapToSpeech));
+        formData.append('watermark', resolvedWatermark);
         formData.append('fast', String(fast));
         formData.append('device', device);
 
@@ -50,19 +59,22 @@ export const DissectionModal: React.FC<DissectionModalProps> = ({
           throw new Error(data.error || 'Dissection failed');
         }
         setLogs(data.stdout || '');
-        setProgressStep('Dissection complete!');
+        setProgressStep('Dissection & CapCut project export complete!');
         setTimeout(() => {
           onComplete(data.projectName);
           onClose();
         }, 1200);
       } else {
-        setProgressStep('Running dissect.py on selected video...');
+        setProgressStep('Running dissect.py with Ensemble Scene Detection & Speech Snapping...');
         const res = await fetch('/api/dissect', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             videoPath: selectedSample,
             threshold: parseFloat(threshold),
+            detector,
+            snapToSpeech,
+            watermark: resolvedWatermark,
             fast,
             device,
           }),
@@ -72,7 +84,7 @@ export const DissectionModal: React.FC<DissectionModalProps> = ({
           throw new Error(data.error || 'Dissection failed');
         }
         setLogs(data.stdout || '');
-        setProgressStep('Dissection complete!');
+        setProgressStep('Dissection & CapCut project export complete!');
         setTimeout(() => {
           onComplete(data.projectName);
           onClose();
@@ -91,7 +103,7 @@ export const DissectionModal: React.FC<DissectionModalProps> = ({
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <div>
             <h3 className="text-base font-semibold text-slate-900">Run Video Dissection</h3>
-            <p className="text-xs text-slate-500">Deconstruct video into silent clips, audio stems, frames, and transcript</p>
+            <p className="text-xs text-slate-500">Deconstruct video into silent clips, audio stems, frames, transcript & CapCut project</p>
           </div>
           <button
             onClick={onClose}
@@ -180,8 +192,55 @@ export const DissectionModal: React.FC<DissectionModalProps> = ({
           {/* Configuration Parameters */}
           <div className="space-y-4 pt-2 border-t border-slate-100">
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-              2. Dissection Parameters
+              2. High-Precision Clipping & Watermark Removal
             </label>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">Scene Cut Detector Mode:</label>
+                <select
+                  value={detector}
+                  onChange={(e) => setDetector(e.target.value as any)}
+                  className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white"
+                >
+                  <option value="ensemble">ensemble (Adaptive + Content + Fade)</option>
+                  <option value="adaptive">adaptive (Motion & Lighting Resilient)</option>
+                  <option value="content">content (Standard HSV Cut Detector)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">Corner Watermark Removal:</label>
+                <select
+                  value={watermarkMode}
+                  onChange={(e) => setWatermarkMode(e.target.value)}
+                  className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white"
+                >
+                  <option value="auto">auto (Auto-detect static corner logo)</option>
+                  <option value="bottom-right">bottom-right corner delogo</option>
+                  <option value="top-right">top-right corner delogo</option>
+                  <option value="top-left">top-left corner delogo</option>
+                  <option value="bottom-left">bottom-left corner delogo</option>
+                  <option value="custom">custom coordinates (x,y,w,h)</option>
+                  <option value="none">none (Disable watermark filter)</option>
+                </select>
+              </div>
+            </div>
+
+            {watermarkMode === 'custom' && (
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">
+                  Watermark Bounding Box (<code className="font-mono">x,y,w,h</code> in pixels):
+                </label>
+                <input
+                  type="text"
+                  value={customWatermarkBox}
+                  onChange={(e) => setCustomWatermarkBox(e.target.value)}
+                  placeholder="480,300,120,40"
+                  className="w-full text-xs font-mono px-3 py-1.5 rounded-lg border border-slate-200"
+                />
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -214,7 +273,24 @@ export const DissectionModal: React.FC<DissectionModalProps> = ({
               </div>
             </div>
 
-            <label className="flex items-center gap-2 p-3 rounded-lg border border-slate-100 bg-slate-50 cursor-pointer">
+            <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-100 bg-slate-50 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={snapToSpeech}
+                onChange={(e) => setSnapToSpeech(e.target.checked)}
+                className="rounded text-slate-900 focus:ring-0 w-4 h-4"
+              />
+              <div>
+                <div className="text-xs font-medium text-slate-900">
+                  Audio-Aware Speech-Boundary Snapping & Frame Quantization
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  Nudges visual cuts within 220ms of spoken word edges so syllables are never cut mid-word
+                </div>
+              </div>
+            </label>
+
+            <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-100 bg-slate-50 cursor-pointer">
               <input
                 type="checkbox"
                 checked={fast}

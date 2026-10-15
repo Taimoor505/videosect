@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="4">
+  <sequence id="interview_demo">
+    <name>interview_demo - Dissection Timeline</name>
+    <duration>100</duration>
+    <rate>
+      <timebase>25</timebase>
+      <ntsc>FALSE</ntsc>
+    </rate>
+    <media>
+      <video>
+        <format>
+          <samplecharacteristics>
+            <width>1920</width>
+            <height>1080</height>
+            <pixelaspectratio>square</pixelaspectratio>
+            <rate><timebase>25</timebase></rate>
+          </samplecharacteristics>
+        </format>
+        <track>
+          <clipitem id="clip_001">
+            <name>clip_001.mp4</name>
+            <duration>49</duration>
+            <rate>
+              <timebase>25</timebase>
+            </rate>
+            <start>0</start>
+            <end>49</end>
+            <in>0</in>
+            <out>49</out>
+            <file id="file_clip_001">
+              <name>clip_001.mp4</name>
+              <pathurl>file://localhost/clips/clip_001.mp4</pathurl>
+            </file>
+          </clipitem>
+          <clipitem id="clip_002">
+            <name>clip_002.mp4</name>
+            <duration>51</duration>
+            <rate>
+              <timebase>25</timebase>
+            </rate>
+            <start>49</start>
+            <end>100</end>
+            <in>0</in>
+            <out>51</out>
+            <file id="file_clip_002">
+              <name>clip_002.mp4</name>
+              <pathurl>file://localhost/clips/clip_002.mp4</pathurl>
+            </file>
+          </clipitem>
+        </track>
+      </video>
+      <audio>
+        <track>
+          <clipitem id="voice_audio">
+            <name>voice.wav (Isolated Speech)</name>
+            <duration>100</duration>
+            <rate>
+              <timebase>25</timebase>
+            </rate>
+            <start>0</start>
+            <end>100</end>
+            <in>0</in>
+            <out>100</out>
+            <file id="file_voice">
+              <name>voice.wav</name>
+              <pathurl>file://localhost/audio/voice.wav</pathurl>
+            </file>
+          </clipitem>
+        </track>
+        <track>
+          <clipitem id="music_audio">
+            <name>music.wav (Background Music)</name>
+            <duration>100</duration>
+            <rate>
+              <timebase>25</timebase>
+            </rate>
+            <start>0</start>
+            <end>100</end>
+            <in>0</in>
+            <out>100</out>
+            <file id="file_music">
+              <name>music.wav</name>
+              <pathurl>file://localhost/audio/music.wav</pathurl>
+            </file>
+          </clipitem>
+        </track>
+      </audio>
+    </media>
+  </sequence>
+</xmeml>

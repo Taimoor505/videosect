@@ -40,6 +40,18 @@ export interface ScenesData {
   total_duration: number;
   fps: number;
   clip_count: number;
+  watermark_removed?: {
+    mode: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null;
+  clipping_settings?: {
+    detector_mode: string;
+    threshold: number;
+    snap_to_speech: boolean;
+  };
   models: {
     whisper: string;
     demucs: string;

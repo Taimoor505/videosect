@@ -6,7 +6,7 @@
     {
       "id": 1,
       "start": 0.3,
-      "end": 2.2,
+      "end": 1.95,
       "text": "Welcome to the video breakdown",
       "words": [
         {
@@ -36,45 +36,45 @@
         {
           "word": "breakdown",
           "start": 1.65,
-          "end": 2.2,
+          "end": 1.95,
           "probability": 0.95
         }
       ]
     },
     {
       "id": 2,
-      "start": 2.6,
-      "end": 4.85,
+      "start": 2.15,
+      "end": 3.98,
       "text": "Notice the seamless scene transition",
       "words": [
         {
           "word": "Notice",
-          "start": 2.6,
-          "end": 3.0,
+          "start": 2.15,
+          "end": 2.55,
           "probability": 0.97
         },
         {
           "word": "the",
-          "start": 3.05,
-          "end": 3.2,
+          "start": 2.6,
+          "end": 2.75,
           "probability": 0.98
         },
         {
           "word": "seamless",
-          "start": 3.25,
-          "end": 3.8,
+          "start": 2.8,
+          "end": 3.25,
           "probability": 0.94
         },
         {
           "word": "scene",
-          "start": 3.85,
-          "end": 4.2,
+          "start": 3.3,
+          "end": 3.65,
           "probability": 0.96
         },
         {
           "word": "transition",
-          "start": 4.25,
-          "end": 4.85,
+          "start": 3.7,
+          "end": 3.98,
           "probability": 0.95
         }
       ]

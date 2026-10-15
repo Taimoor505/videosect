@@ -168,7 +168,15 @@ app.get('/api/projects/:id', (req, res) => {
 
 // Run dissection on sample or custom file
 app.post('/api/dissect', (req, res) => {
-  const { videoPath, threshold = 27.0, fast = false, device = 'auto' } = req.body;
+  const {
+    videoPath,
+    threshold = 27.0,
+    fast = false,
+    device = 'auto',
+    watermark = 'none',
+    detector = 'ensemble',
+    snapToSpeech = true
+  } = req.body;
   if (!videoPath) {
     return res.status(400).json({ error: 'videoPath is required' });
   }
@@ -186,10 +194,15 @@ app.post('/api/dissect', (req, res) => {
     resolvedVideo,
     '--output-dir', outputRoot,
     '--threshold', String(threshold),
-    '--device', device
+    '--device', device,
+    '--watermark', String(watermark),
+    '--detector', String(detector)
   ];
   if (fast) {
     args.push('--fast');
+  }
+  if (snapToSpeech === false || snapToSpeech === 'false') {
+    args.push('--no-snap-speech');
   }
 
   const proc = spawn('python3', args, { cwd: __dirname });
@@ -232,6 +245,9 @@ app.post('/api/upload-and-dissect', upload.single('video'), (req, res) => {
   const threshold = req.body.threshold || '27.0';
   const fast = req.body.fast === 'true' || req.body.fast === true;
   const device = req.body.device || 'auto';
+  const watermark = req.body.watermark || 'none';
+  const detector = req.body.detector || 'ensemble';
+  const snapToSpeech = req.body.snapToSpeech !== 'false' && req.body.snapToSpeech !== false;
 
   const uploadedPath = req.file.path;
   const args = [
@@ -239,10 +255,15 @@ app.post('/api/upload-and-dissect', upload.single('video'), (req, res) => {
     uploadedPath,
     '--output-dir', outputRoot,
     '--threshold', threshold,
-    '--device', device
+    '--device', device,
+    '--watermark', watermark,
+    '--detector', detector
   ];
   if (fast) {
     args.push('--fast');
+  }
+  if (!snapToSpeech) {
+    args.push('--no-snap-speech');
   }
 
   const proc = spawn('python3', args, { cwd: __dirname });
@@ -276,9 +297,129 @@ app.post('/api/upload-and-dissect', upload.single('video'), (req, res) => {
   });
 });
 
-// Download individual code assets (dissect.py, video_dissection.ipynb, test_dissect.py, README.md, requirements.txt)
+// Rebuild a new MP4 clip from pruned/remaining frames (with optional isolated voice/music audio muxing)
+app.post('/api/rebuild-clip', (req, res) => {
+  const {
+    projectId,
+    clipId,
+    keptFrames = [],
+    includeVoice = false,
+    includeMusic = false
+  } = req.body;
+
+  if (!projectId || !clipId || !Array.isArray(keptFrames) || keptFrames.length === 0) {
+    return res.status(400).json({ error: 'projectId, clipId, and non-empty keptFrames array are required' });
+  }
+
+  const projDir = path.join(outputRoot, projectId);
+  const framesDir = path.join(projDir, 'frames', clipId);
+  if (!fs.existsSync(framesDir)) {
+    return res.status(404).json({ error: `Frames folder not found for ${clipId}` });
+  }
+
+  // Read scenes.json for FPS and clip start_time
+  let fps = 30;
+  let startSec = 0;
+  const scenesPath = path.join(projDir, 'scenes.json');
+  if (fs.existsSync(scenesPath)) {
+    try {
+      const sData = JSON.parse(fs.readFileSync(scenesPath, 'utf-8'));
+      fps = Number(sData.fps) || 30;
+      const foundScene = (sData.scenes || []).find((s: any) => s.clip_id === clipId);
+      if (foundScene) {
+        startSec = Number(foundScene.start_time) || 0;
+      }
+    } catch {}
+  }
+
+  const tempFrameStaging = path.join(uploadDir, `rebuild_${Date.now()}_${clipId}`);
+  fs.mkdirSync(tempFrameStaging, { recursive: true });
+
+  const rebuiltDir = path.join(projDir, 'rebuilt');
+  fs.mkdirSync(rebuiltDir, { recursive: true });
+
+  // Copy kept frames in sequential order: 000001.jpg, 000002.jpg...
+  let copiedCount = 0;
+  for (const frameName of keptFrames) {
+    const safeFrame = path.basename(String(frameName));
+    const srcPath = path.join(framesDir, safeFrame);
+    if (fs.existsSync(srcPath)) {
+      copiedCount++;
+      const seqName = `${String(copiedCount).padStart(6, '0')}.jpg`;
+      fs.copyFileSync(srcPath, path.join(tempFrameStaging, seqName));
+    }
+  }
+
+  if (copiedCount === 0) {
+    fs.rmSync(tempFrameStaging, { recursive: true, force: true });
+    return res.status(400).json({ error: 'No valid frame files found to rebuild' });
+  }
+
+  const rebuiltDuration = copiedCount / fps;
+  const outFilename = `rebuilt_${clipId}_${copiedCount}f.mp4`;
+  const outPath = path.join(rebuiltDir, outFilename);
+
+  const voiceWav = path.join(projDir, 'audio', 'voice.wav');
+  const musicWav = path.join(projDir, 'audio', 'music.wav');
+  const useVoice = includeVoice && fs.existsSync(voiceWav);
+  const useMusic = includeMusic && fs.existsSync(musicWav);
+
+  const ffArgs: string[] = [
+    '-y',
+    '-framerate', String(fps),
+    '-i', path.join(tempFrameStaging, '%06d.jpg')
+  ];
+
+  if (useVoice && useMusic) {
+    ffArgs.push(
+      '-ss', String(startSec), '-t', String(rebuiltDuration), '-i', voiceWav,
+      '-ss', String(startSec), '-t', String(rebuiltDuration), '-i', musicWav,
+      '-filter_complex', '[1:a][2:a]amix=inputs=2:duration=shortest[aout]',
+      '-map', '0:v', '-map', '[aout]',
+      '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac'
+    );
+  } else if (useVoice) {
+    ffArgs.push(
+      '-ss', String(startSec), '-t', String(rebuiltDuration), '-i', voiceWav,
+      '-map', '0:v', '-map', '1:a',
+      '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest'
+    );
+  } else if (useMusic) {
+    ffArgs.push(
+      '-ss', String(startSec), '-t', String(rebuiltDuration), '-i', musicWav,
+      '-map', '0:v', '-map', '1:a',
+      '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest'
+    );
+  } else {
+    ffArgs.push('-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p', '-an');
+  }
+
+  ffArgs.push(outPath);
+
+  const proc = spawn('ffmpeg', ffArgs);
+  let errOut = '';
+  proc.stderr.on('data', d => { errOut += d.toString(); });
+  proc.on('close', code => {
+    try {
+      fs.rmSync(tempFrameStaging, { recursive: true, force: true });
+    } catch {}
+    if (code === 0 && fs.existsSync(outPath)) {
+      res.json({
+        success: true,
+        url: `/output/${projectId}/rebuilt/${outFilename}?t=${Date.now()}`,
+        filename: outFilename,
+        frameCount: copiedCount,
+        duration: Number(rebuiltDuration.toFixed(3))
+      });
+    } else {
+      res.status(500).json({ error: `FFmpeg rebuild failed: ${errOut.slice(-400)}` });
+    }
+  });
+});
+
+// Download individual code assets (dissect.py, capcut_generator.py, video_dissection.ipynb, test_dissect.py, README.md, requirements.txt)
 app.get('/api/download/file/:filename', (req, res) => {
-  const allowed = ['dissect.py', 'video_dissection.ipynb', 'test_dissect.py', 'README.md', 'requirements.txt'];
+  const allowed = ['dissect.py', 'capcut_generator.py', 'video_dissection.ipynb', 'test_dissect.py', 'README.md', 'requirements.txt'];
   const filename = req.params.filename;
   if (!allowed.includes(filename)) {
     return res.status(403).json({ error: 'File not permitted for download' });
