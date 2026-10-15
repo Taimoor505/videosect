@@ -1,22 +1,159 @@
 #!/usr/bin/env python3
 """
-CapCut and NLE Timeline Project Generator
-=========================================
-Generates:
-1. CapCut Desktop & Web Draft Project:
-   - draft_content.json (multi-track timeline with silent clips, isolated voice stem, music stem, subtitles)
-   - draft_meta_info.json (CapCut project metadata)
-2. Final Cut Pro / Premiere XML (timeline.xml)
-3. HOW_TO_IMPORT_IN_CAPCUT.md guide
+CapCut Ready Package & OpenTimelineIO NLE Exporter
+==================================================
+Provides:
+1. Default `capcut_ready/` export:
+   - Numbered silent clips (`clip_001.mp4`, `clip_002.mp4`, ...)
+   - `voice.wav` (isolated speech track)
+   - `music.wav` (isolated music/backing track)
+   - `captions.srt` (timestamped subtitles)
+   - `IMPORT.md` (concise, honest manual import instructions for CapCut)
+2. Experimental `--capcut-draft` generator (`draft_content.json`, `draft_meta_info.json`,
+   `capcut_draft_notes`):
+   - Explicitly warns that CapCut does not officially support third-party project files
+     and newer CapCut builds reject or encrypt draft files.
+3. Validated NLE Timeline Export (`--export fcp7xml,edl,fcpxml`) via OpenTimelineIO:
+   - Uses `opentimelineio` + installed adapter plugins (`fcp_xml`, `cmx_3600`, `fcpx_xml`)
+     for DaVinci Resolve, Adobe Premiere Pro, and Final Cut Pro.
+   - Validates every exported timeline by re-reading it with OpenTimelineIO.
 """
 
 import json
 import os
 import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+# ==============================================================================
+# 1. Default Honest CapCut Export: capcut_ready/
+# ==============================================================================
+
+def generate_capcut_ready_import_md(project_name: str, clip_count: int) -> str:
+    """
+    Generate honest, step-by-step manual import instructions for CapCut (`IMPORT.md`).
+    No '1-click import' or 'import timeline.xml into CapCut' claims.
+    """
+    return f"""# Importing `{project_name}` into CapCut (Manual Steps)
+
+> **Why manual import?**  
+> CapCut does not officially support importing third-party project or XML timeline files, and newer CapCut Desktop builds reject or encrypt externally generated `draft_content.json` files. This `capcut_ready/` folder organizes all dissected stems so you can assemble the exact timeline in under 30 seconds.
+
+## Contents of `capcut_ready/`
+- `clip_001.mp4` .. `clip_{clip_count:03d}.mp4` (also in `clips/`) — Frame-accurate silent video clips in chronological order
+- `voice.wav` — Isolated vocal/speech stem (full video duration)
+- `music.wav` — Isolated background music/ambient stem (full video duration)
+- `captions.srt` — Word-aligned SubRip subtitle file
+
+## Manual Assembly Steps (CapCut Desktop, Web, or Mobile)
+1. **Create Project**: Open CapCut and click **Create project**, then import all files from `capcut_ready/`.
+2. **Place Silent Video Clips**: Select `clip_001.mp4` through `clip_{clip_count:03d}.mp4` in numerical order and drag them onto **Video Track 1**. Because the cuts are frame-quantized, they align end-to-end with zero gap or drift.
+3. **Add Audio Stems**: Drag `voice.wav` onto **Audio Track 1** at `00:00:00.000`, and drag `music.wav` onto **Audio Track 2** at `00:00:00.000`.
+4. **Load Subtitles**: Open **Text** -> **Local captions** (or **Import captions**) and select `captions.srt`.
+
+## Using DaVinci Resolve, Premiere Pro, or Final Cut Pro Instead?
+Run `videosect` with `--export fcp7xml,edl,fcpxml` to generate OpenTimelineIO-validated timelines (`timeline_fcp7.xml`, `timeline.edl`, `timeline.fcpxml`) that NLEs with official XML/EDL support can import directly.
+"""
+
+
+def export_capcut_ready_folder(
+    project_source_dir: Path,
+    target_ready_dir: Optional[Path] = None
+) -> Path:
+    """
+    Create the default `capcut_ready/` folder containing numbered silent clips,
+    `voice.wav`, `music.wav`, `captions.srt`, and `IMPORT.md`.
+    """
+    if target_ready_dir is None:
+        target_ready_dir = project_source_dir / "capcut_ready"
+    target_ready_dir.mkdir(parents=True, exist_ok=True)
+
+    scenes_json_path = project_source_dir / "scenes.json"
+    video_name = project_source_dir.name
+    clip_count = 0
+    if scenes_json_path.exists():
+        try:
+            scenes_data = json.loads(scenes_json_path.read_text(encoding="utf-8"))
+            video_name = scenes_data.get("video_name", video_name)
+            clip_count = int(scenes_data.get("clip_count", len(scenes_data.get("scenes", []))))
+        except Exception:
+            pass
+
+    # 1. Copy numbered silent clips to both capcut_ready/clip_XXX.mp4 and capcut_ready/clips/clip_XXX.mp4
+    src_clips_dir = project_source_dir / "clips"
+    ready_clips_dir = target_ready_dir / "clips"
+    ready_clips_dir.mkdir(parents=True, exist_ok=True)
+    if src_clips_dir.exists():
+        clip_files = sorted(src_clips_dir.glob("clip_*.mp4"))
+        if clip_files:
+            clip_count = len(clip_files)
+        for cf in clip_files:
+            shutil.copy2(cf, target_ready_dir / cf.name)
+            shutil.copy2(cf, ready_clips_dir / cf.name)
+
+    # 2. Copy voice.wav and music.wav to capcut_ready/voice.wav and capcut_ready/music.wav
+    src_audio_dir = project_source_dir / "audio"
+    for stem_name in ("voice.wav", "music.wav"):
+        src_stem = src_audio_dir / stem_name
+        if src_stem.exists():
+            shutil.copy2(src_stem, target_ready_dir / stem_name)
+
+    # 3. Copy transcript.srt -> captions.srt
+    src_srt = project_source_dir / "transcript" / "transcript.srt"
+    dest_srt = target_ready_dir / "captions.srt"
+    if src_srt.exists():
+        shutil.copy2(src_srt, dest_srt)
+    else:
+        dest_srt.write_text("", encoding="utf-8")
+
+    # 4. Write IMPORT.md
+    import_md = generate_capcut_ready_import_md(video_name, max(clip_count, 1))
+    (target_ready_dir / "IMPORT.md").write_text(import_md, encoding="utf-8")
+
+    return target_ready_dir
+
+
+# ==============================================================================
+# 2. Experimental CapCut Draft Generator (--capcut-draft)
+# ==============================================================================
+
+CAPCUT_DRAFT_WARNING = (
+    "[Warning] --capcut-draft is experimental and version-dependent. "
+    "CapCut does not officially support third-party project files, and newer CapCut Desktop builds "
+    "reject or encrypt externally written draft_content.json files. "
+    "See capcut_draft_notes for details, or use capcut_ready/ for reliable manual import."
+)
+
+
+def generate_capcut_draft_notes(project_name: str) -> str:
+    """
+    Generate the `capcut_draft_notes` disclosure file listing what schema is written
+    and which CapCut versions it was NOT validated against.
+    """
+    return f"""CapCut Experimental Draft Notes ({project_name})
+==================================================
+Status: EXPERIMENTAL / UNOFFICIAL / VERSION-DEPENDENT
+
+1. Schema Format Produced:
+   - Legacy unencrypted JSON draft structure (`version: 360000`, microsecond timeranges)
+     modeled on CapCut Desktop 3.x local draft folders (`draft_content.json` + `draft_meta_info.json`).
+
+2. CapCut Versions NOT Validated Against (Known to Reject or Encrypt Drafts):
+   - CapCut Desktop v4.0.0 and newer (macOS / Windows) — introduced encrypted/signed `draft_content.json`
+     and stricter schema integrity checks that reject third-party generated drafts.
+   - CapCut Desktop v5.x / v6.x+ (2025–2026 builds) — NOT validated; frequently shows
+     "Project file corrupted" or ignores unencrypted third-party `draft_content.json`.
+   - CapCut Web (capcut.com) & CapCut Mobile (iOS / Android) — do not read local desktop draft folders.
+
+3. Recommended Reliable Alternative:
+   - Use the default `capcut_ready/` folder (`clip_001.mp4`..., `voice.wav`, `music.wav`, `captions.srt`)
+     and follow `capcut_ready/IMPORT.md` for manual drag-and-drop assembly.
+   - For DaVinci Resolve, Adobe Premiere Pro, or Final Cut Pro, use `--export fcp7xml,edl,fcpxml`.
+"""
 
 
 def generate_capcut_draft_content(
@@ -25,15 +162,15 @@ def generate_capcut_draft_content(
     media_relative_prefix: str = ""
 ) -> Dict[str, Any]:
     """
-    Build CapCut draft_content.json multi-track timeline structure.
+    Build experimental CapCut draft_content.json multi-track timeline structure.
     Time units in CapCut are in microseconds (1 second = 1,000,000 us).
     """
     total_duration_sec = float(scenes_data.get("total_duration", 0.0))
     total_duration_us = int(total_duration_sec * 1_000_000)
     fps = float(scenes_data.get("fps", 30.0))
 
-    canvas_width = 1920
-    canvas_height = 1080
+    canvas_width = int(scenes_data.get("width", 1920))
+    canvas_height = int(scenes_data.get("height", 1080))
 
     scenes: List[Dict[str, Any]] = scenes_data.get("scenes", [])
 
@@ -42,7 +179,6 @@ def generate_capcut_draft_content(
     texts_materials: List[Dict[str, Any]] = []
     speeds_materials: List[Dict[str, Any]] = []
 
-    # Default 1.0x speed material
     speed_id = str(uuid.uuid4()).upper()
     speeds_materials.append({
         "curve_speed": None,
@@ -52,7 +188,6 @@ def generate_capcut_draft_content(
         "type": "speed"
     })
 
-    # Track 0: Video Track (Sequenced silent scene clips)
     video_segments: List[Dict[str, Any]] = []
     current_target_start_us = 0
 
@@ -110,7 +245,7 @@ def generate_capcut_draft_content(
             "track_attribute": 0,
             "track_render_index": 0,
             "visible": True,
-            "volume": 0.0  # Silent clip
+            "volume": 0.0
         })
 
         current_target_start_us += clip_duration_us
@@ -232,10 +367,10 @@ def generate_capcut_draft_content(
                             "alpha": 1.0,
                             "content": {
                                 "render_type": "solid",
-                                "solid": { "alpha": 1.0, "color": [1.0, 1.0, 1.0] }
+                                "solid": {"alpha": 1.0, "color": [1.0, 1.0, 1.0]}
                             }
                         },
-                        "font": { "id": "", "path": "" },
+                        "font": {"id": "", "path": ""},
                         "range": [0, len(txt)],
                         "size": 7.0
                     }],
@@ -286,7 +421,6 @@ def generate_capcut_draft_content(
                 "volume": 1.0
             })
 
-    # Assemble CapCut Tracks
     tracks = [
         {
             "attribute": 0,
@@ -378,7 +512,7 @@ def generate_capcut_draft_content(
         "last_modified_platform": {
             "app_id": 3704,
             "app_source": "capcut",
-            "app_version": "5.0.0",
+            "app_version": "3.8.0",
             "os": "all"
         },
         "materials": {
@@ -426,11 +560,11 @@ def generate_capcut_draft_content(
         },
         "mutable_config": None,
         "name": scenes_data.get("video_name", "Dissected_Video_Project"),
-        "new_version": "100.0.0",
+        "new_version": "85.0.0",
         "platform": {
             "app_id": 3704,
             "app_source": "capcut",
-            "app_version": "5.0.0",
+            "app_version": "3.8.0",
             "os": "all"
         },
         "relationships": [],
@@ -449,7 +583,7 @@ def generate_capcut_draft_meta_info(
     draft_id: str
 ) -> Dict[str, Any]:
     """
-    Build CapCut draft_meta_info.json project envelope.
+    Build experimental CapCut draft_meta_info.json project envelope.
     """
     now_us = int(time.time() * 1_000_000)
     dur_sec = float(scenes_data.get("total_duration", 0.0))
@@ -514,8 +648,8 @@ def generate_universal_fcpxml(
     transcript_data: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Generate standard Final Cut Pro / Premiere XML (timeline.xml)
-    Compatible with CapCut, Adobe Premiere Pro, DaVinci Resolve, and Final Cut Pro.
+    Generate FCP7 XML (xmeml version 4) for DaVinci Resolve and Adobe Premiere Pro.
+    Note: CapCut does NOT support importing FCP7 XML files.
     """
     proj_name = scenes_data.get("video_name", "Dissected_Video")
     fps = int(round(float(scenes_data.get("fps", 30.0))))
@@ -548,11 +682,10 @@ def generate_universal_fcpxml(
         '        <track>'
     ]
 
-    # Video Track Clips
     current_in = 0
     for idx, sc in enumerate(scenes, 1):
         clip_id = sc.get("clip_id", f"clip_{idx:03d}")
-        dur_frames = int(float(sc.get("duration", 1.0)) * fps)
+        dur_frames = max(1, int(round(float(sc.get("duration", 1.0)) * fps)))
         current_out = current_in + dur_frames
 
         xml_lines.extend([
@@ -622,49 +755,10 @@ def generate_universal_fcpxml(
 
 
 def generate_capcut_import_instructions(project_name: str) -> str:
-    return f"""# How to Import into CapCut Desktop & Web 🎬
-
-This archive contains a ready-to-run CapCut project draft configured with:
-- **Track 1 (Video)**: All silent scene clips sequenced consecutively with frame-accurate cuts
-- **Track 2 (Audio)**: Isolated voice stem (`voice.wav` - background music removed)
-- **Track 3 (Audio)**: Isolated background music & ambient track (`music.wav`)
-- **Track 4 (Subtitles)**: Spoken dialogue synced to time ranges
-
----
-
-### Method A: Direct Import in CapCut Desktop (Instant 1-Click Open)
-
-CapCut stores draft projects in its user data folder:
-
-#### On Windows:
-1. Extract or copy this entire project folder into your CapCut Drafts folder:
-   `%LOCALAPPDATA%\\CapCut\\User Data\\Projects\\com.lveditor.draft\\`
-   *(Press Win + R, paste `%LOCALAPPDATA%\\CapCut\\User Data\\Projects\\com.lveditor.draft\\` and hit Enter)*
-2. Launch CapCut Desktop.
-3. You will immediately see **"{project_name}"** on your project home screen. Click it to open the ready-cut timeline!
-
-#### On macOS:
-1. Open Finder, press `Cmd + Shift + G`, and navigate to:
-   `~/Movies/CapCut/User Data/Projects/com.lveditor.draft/`
-2. Copy this project folder into that directory.
-3. Launch CapCut Desktop. The project will appear in your project list with all tracks aligned.
-
----
-
-### Method B: Universal XML / FCPXML Import
-If you prefer standard NLE import (CapCut, Adobe Premiere, DaVinci Resolve, Final Cut):
-1. In CapCut Desktop or Premiere Pro, go to **File** → **Import** (or Import XML).
-2. Select `timeline.xml` from this folder.
-3. The video and audio tracks will automatically populate into your sequence.
-
----
-
-### Method C: CapCut Web & Manual Media
-1. In CapCut Web (capcut.com), create a new project.
-2. Drag and drop all files from `clips/` onto the video timeline.
-3. Drag `audio/voice.wav` and `audio/music.wav` onto the audio tracks.
-4. Go to **Captions** → **Upload Subtitle** and upload `transcript/transcript.srt`.
-"""
+    """
+    Generate honest documentation for experimental CapCut draft bundles and manual import.
+    """
+    return generate_capcut_ready_import_md(project_name, clip_count=1)
 
 
 def export_capcut_project_bundle(
@@ -672,9 +766,11 @@ def export_capcut_project_bundle(
     target_output_dir: Path
 ) -> Path:
     """
-    Creates a full CapCut draft folder containing draft_content.json, draft_meta_info.json,
-    timeline.xml, clips/, audio/, transcript/, and instructions.
+    Generates the experimental `--capcut-draft` folder containing `draft_content.json`,
+    `draft_meta_info.json`, `capcut_draft_notes`, `IMPORT.md`, and copies of media stems.
+    Always prints a warning that third-party CapCut drafts are experimental and version-dependent.
     """
+    print(CAPCUT_DRAFT_WARNING)
     target_output_dir.mkdir(parents=True, exist_ok=True)
 
     scenes_json_path = project_source_dir / "scenes.json"
@@ -693,7 +789,10 @@ def export_capcut_project_bundle(
         except Exception:
             pass
 
-    # 1. Generate CapCut draft_content.json
+    video_name = scenes_data.get("video_name", "Dissected_Video")
+    clip_count = len(scenes_data.get("scenes", []))
+
+    # 1. Generate experimental CapCut draft_content.json
     draft_content = generate_capcut_draft_content(scenes_data, transcript_data)
     draft_content_path = target_output_dir / "draft_content.json"
     draft_content_path.write_text(json.dumps(draft_content, indent=2), encoding="utf-8")
@@ -703,15 +802,15 @@ def export_capcut_project_bundle(
     draft_meta_path = target_output_dir / "draft_meta_info.json"
     draft_meta_path.write_text(json.dumps(draft_meta, indent=2), encoding="utf-8")
 
-    # 3. Generate universal timeline.xml
-    xml_content = generate_universal_fcpxml(scenes_data, transcript_data)
-    xml_path = target_output_dir / "timeline.xml"
-    xml_path.write_text(xml_content, encoding="utf-8")
+    # 3. Write capcut_draft_notes (and .txt) listing unvalidated CapCut versions
+    notes_content = generate_capcut_draft_notes(video_name)
+    (target_output_dir / "capcut_draft_notes").write_text(notes_content, encoding="utf-8")
+    (target_output_dir / "capcut_draft_notes.txt").write_text(notes_content, encoding="utf-8")
 
-    # 4. Generate import guide
-    guide_content = generate_capcut_import_instructions(scenes_data.get("video_name", "Dissected_Video"))
-    guide_path = target_output_dir / "HOW_TO_IMPORT_IN_CAPCUT.md"
-    guide_path.write_text(guide_content, encoding="utf-8")
+    # 4. Write honest IMPORT.md (and legacy filename alias for compatibility)
+    guide_content = generate_capcut_ready_import_md(video_name, max(clip_count, 1))
+    (target_output_dir / "IMPORT.md").write_text(guide_content, encoding="utf-8")
+    (target_output_dir / "HOW_TO_IMPORT_IN_CAPCUT.md").write_text(guide_content, encoding="utf-8")
 
     # 5. Copy clips, audio, transcript
     for folder_name in ("clips", "audio", "transcript"):
@@ -726,10 +825,169 @@ def export_capcut_project_bundle(
     return target_output_dir
 
 
+# ==============================================================================
+# 3. OpenTimelineIO NLE Timeline Export & Round-Trip Validation
+# ==============================================================================
+
+OTIO_FORMAT_MAP = {
+    "fcp7xml": ("fcp_xml", "timeline_fcp7.xml", True),
+    "fcp_xml": ("fcp_xml", "timeline_fcp7.xml", True),
+    "xml": ("fcp_xml", "timeline_fcp7.xml", True),
+    "edl": ("cmx_3600", "timeline.edl", False),       # CMX 3600 EDL is single-video-track
+    "cmx_3600": ("cmx_3600", "timeline.edl", False),
+    "fcpxml": ("fcpx_xml", "timeline.fcpxml", True),
+    "fcpx_xml": ("fcpx_xml", "timeline.fcpxml", True),
+    "otio": ("otio_json", "timeline.otio", True),
+}
+
+
+def build_otio_timeline(
+    scenes_data: Dict[str, Any],
+    include_audio_tracks: bool = True
+) -> Any:
+    """
+    Construct an `opentimelineio.schema.Timeline` from `scenes.json`.
+    """
+    import opentimelineio as otio
+
+    video_name = scenes_data.get("video_name", "Dissected_Video")
+    fps = float(round(float(scenes_data.get("fps", 30.0)), 3))
+    if fps <= 0:
+        fps = 30.0
+
+    tl = otio.schema.Timeline(name=f"{video_name}_timeline")
+    v_track = otio.schema.Track(name="V1_Silent_Clips", kind=otio.schema.TrackKind.Video)
+
+    scenes = scenes_data.get("scenes", [])
+    total_frames = 0
+
+    for idx, sc in enumerate(scenes, 1):
+        clip_id = sc.get("clip_id", f"clip_{idx:03d}")
+        clip_file = sc.get("file", f"clips/{clip_id}.mp4")
+        dur_sec = float(sc.get("duration", 1.0))
+        frames = max(1, int(round(dur_sec * fps)))
+        total_frames += frames
+
+        rt_zero = otio.opentime.RationalTime(0, fps)
+        rt_dur = otio.opentime.RationalTime(frames, fps)
+        tr = otio.opentime.TimeRange(rt_zero, rt_dur)
+
+        mr = otio.schema.ExternalReference(
+            target_url=clip_file,
+            available_range=tr
+        )
+        clip = otio.schema.Clip(
+            name=clip_id,
+            media_reference=mr,
+            source_range=tr
+        )
+        v_track.append(clip)
+
+    tl.tracks.append(v_track)
+
+    if include_audio_tracks and total_frames > 0:
+        total_tr = otio.opentime.TimeRange(
+            otio.opentime.RationalTime(0, fps),
+            otio.opentime.RationalTime(total_frames, fps)
+        )
+        for track_name, rel_audio in [
+            ("A1_Isolated_Voice", "audio/voice.wav"),
+            ("A2_Background_Music", "audio/music.wav")
+        ]:
+            a_track = otio.schema.Track(name=track_name, kind=otio.schema.TrackKind.Audio)
+            a_ref = otio.schema.ExternalReference(
+                target_url=rel_audio,
+                available_range=total_tr
+            )
+            a_clip = otio.schema.Clip(
+                name=track_name,
+                media_reference=a_ref,
+                source_range=total_tr
+            )
+            a_track.append(a_clip)
+            tl.tracks.append(a_track)
+
+    return tl
+
+
+def export_otio_timelines(
+    project_source_dir: Path,
+    formats: List[str],
+    output_dir: Optional[Path] = None
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Export NLE timelines (`fcp7xml`, `edl`, `fcpxml`, `otio`) using OpenTimelineIO
+    and validate every exported file by re-reading it with OpenTimelineIO.
+    """
+    import opentimelineio as otio
+
+    if output_dir is None:
+        output_dir = project_source_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    scenes_json_path = project_source_dir / "scenes.json"
+    if not scenes_json_path.exists():
+        raise FileNotFoundError(f"scenes.json not found in {project_source_dir}")
+
+    scenes_data = json.loads(scenes_json_path.read_text(encoding="utf-8"))
+    expected_video_clips = len(scenes_data.get("scenes", []))
+
+    available_adapters = set(otio.adapters.available_adapter_names())
+    results: Dict[str, Dict[str, Any]] = {}
+
+    # Normalize requested formats (allow comma-separated strings)
+    normalized_formats: List[str] = []
+    for f in formats:
+        for part in f.split(","):
+            clean = part.strip().lower()
+            if clean and clean not in normalized_formats:
+                normalized_formats.append(clean)
+
+    for fmt in normalized_formats:
+        if fmt not in OTIO_FORMAT_MAP:
+            raise ValueError(
+                f"Unsupported --export format '{fmt}'. Supported formats: fcp7xml, edl, fcpxml, otio"
+            )
+        adapter_name, filename, include_audio = OTIO_FORMAT_MAP[fmt]
+        if adapter_name not in available_adapters:
+            raise RuntimeError(
+                f"OpenTimelineIO adapter '{adapter_name}' for '{fmt}' is not installed. "
+                f"Installed adapters: {sorted(available_adapters)}. "
+                f"Install plugin packages: pip install otio-fcp-adapter otio-cmx3600-adapter otio-fcpx-xml-adapter"
+            )
+
+        out_path = output_dir / filename
+        tl = build_otio_timeline(scenes_data, include_audio_tracks=include_audio)
+        otio.adapters.write_to_file(tl, str(out_path), adapter_name=adapter_name)
+
+        # Validate by re-reading the exported file with OpenTimelineIO
+        read_back = otio.adapters.read_from_file(str(out_path), adapter_name=adapter_name)
+        read_clips = list(read_back.find_clips())
+        if len(read_clips) < expected_video_clips:
+            raise RuntimeError(
+                f"OTIO validation failed for {fmt} ({out_path.name}): "
+                f"expected at least {expected_video_clips} clips, read back {len(read_clips)}"
+            )
+
+        print(
+            f"[NLE Export] Exported & OTIO-validated {fmt} ({adapter_name}) -> {out_path.name} "
+            f"({len(read_clips)} clips verified)"
+        )
+        results[fmt] = {
+            "format": fmt,
+            "adapter": adapter_name,
+            "path": str(out_path),
+            "filename": out_path.name,
+            "validated": True,
+            "clip_count_read_back": len(read_clips)
+        }
+
+    return results
+
+
 if __name__ == "__main__":
-    import sys
     if len(sys.argv) > 1:
         src = Path(sys.argv[1])
-        out = Path(sys.argv[2]) if len(sys.argv) > 2 else src / "capcut_draft"
-        export_capcut_project_bundle(src, out)
-        print(f"Generated CapCut draft project at {out}")
+        out = Path(sys.argv[2]) if len(sys.argv) > 2 else src / "capcut_ready"
+        export_capcut_ready_folder(src, out)
+        print(f"Generated CapCut ready folder at {out}")

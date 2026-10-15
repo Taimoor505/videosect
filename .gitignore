@@ -1,8 +1,30 @@
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Pipeline outputs & scratch directories
+output/
+_temp/
+uploads/
+public/output/*/capcut_project/
+public/output/*/_temp/
+*.zip
+
+# Node & Frontend build
 node_modules/
 build/
 dist/
+server.js
 coverage/
+
+# Environment & OS
 .DS_Store
 *.log
 .env*
 !.env.example
+

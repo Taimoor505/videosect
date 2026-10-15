@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""CLI wrapper for `videosect` subcommands (`videosect recut`, `videosect assemble`, etc.)."""
+import sys
+import dissect
+
+if __name__ == "__main__":
+    dissect.main(sys.argv[1:])

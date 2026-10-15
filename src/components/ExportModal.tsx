@@ -536,11 +536,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           <div className="flex items-center gap-2.5 w-full sm:w-auto">
             <a
               href={`/api/download/capcut-zip/${project.id}`}
-              className="flex-1 sm:flex-none px-3.5 py-2 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
-              title="Download entire project packaged specifically for CapCut"
+              className="flex-1 sm:flex-none px-3.5 py-2 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
+              title="Download capcut_ready/ package with numbered silent clips, voice.wav, music.wav, captions.srt, and IMPORT.md"
             >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              <span>1-Click CapCut ZIP</span>
+              <Sparkles className="w-3.5 h-3.5 text-slate-700" />
+              <span>CapCut Ready ZIP</span>
             </a>
 
             <button

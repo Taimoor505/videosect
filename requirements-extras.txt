@@ -1,0 +1,18 @@
+# Videosect Optional Heavy Extras (Python >= 3.10)
+# Every package here is strictly optional and gated behind a CLI flag with a clean fallback.
+
+# Forced Alignment (--align) & Speaker Diarization (--diarize, requires HF_TOKEN)
+whisperx==3.8.6
+
+# Deep 3D-CNN Shot Transition Detection (--detector transnet | merge)
+# Note: Third-party PyTorch port of soCzech/TransNetV2; MIT license in wheel but omitted on PyPI metadata.
+transnetv2-pytorch==1.0.5
+
+# BS-RoFormer / Mel-Band RoFormer Vocal Separation (--separator roformer)
+audio-separator==0.47.0
+
+# Burned-in Subtitle Detection & OCR (--ocr-subs)
+rapidocr-onnxruntime==1.4.4
+
+# Experimental Shot Captioning (--describe) & Shot Framing Classification (--shot-type)
+transformers==5.20.0

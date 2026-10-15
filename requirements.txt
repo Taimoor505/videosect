@@ -1,15 +1,35 @@
-# Video Dissection Tool Dependencies
-# Python >= 3.9 recommended
+# Videosect Core Dependencies (Python >= 3.10)
+# All versions pinned and verified against real package signatures.
 
-# Core ML and Audio Processing
-faster-whisper>=1.0.0
-demucs>=4.0.1
-scenedetect[opencv]>=0.6.2
+# Scene Detection, Image & Frame Processing
+scenedetect==0.7.2
+opencv-python-headless==5.0.0.93
+numpy==2.2.6
+Pillow==12.3.0
+tqdm==4.70.1
 
-# PyTorch (CUDA or CPU depending on target machine)
-torch>=2.1.0
-torchaudio>=2.1.0
+# Audio Analysis, Beat Tracking & I/O
+scipy==1.15.3
+soundfile==0.14.0
+librosa==0.11.0
 
-# Media Utilities
-tqdm>=4.66.0
-numpy>=1.24.0
+# NLE Timeline Export & Validation (FCP7 XML, CMX 3600 EDL, FCPXML)
+opentimelineio==0.18.1
+otio-fcp-adapter==1.0.0
+otio-cmx3600-adapter==1.0.0
+otio-fcpx-xml-adapter==1.0.0
+
+# Core Speech Transcription & Vocal Stem Separation
+faster-whisper==1.2.1
+demucs==4.1.0
+
+# ==============================================================================
+# Optional Heavy Extras (install via `pip install -r requirements-extras.txt`)
+# Pipeline falls back cleanly if any of these are not installed:
+#   whisperx==3.8.6               # --align (forced phoneme alignment) & --diarize
+#   transnetv2-pytorch==1.0.5     # --detector transnet | merge (3D-CNN shot detection)
+#   audio-separator==0.47.0       # --separator roformer (BS-RoFormer vocal isolation)
+#   rapidocr-onnxruntime==1.4.4   # --ocr-subs (burned-in subtitle OCR without modifying video)
+#   transformers==5.20.0          # --describe & --shot-type (experimental local VLM/CLIP)
+# ==============================================================================
+

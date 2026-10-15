@@ -1,0 +1,38 @@
+name: Videosect CI
+
+on:
+  push:
+    branches: [ main, master, "feat/**" ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-pipeline:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsm6 libxext6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install core dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run end-to-end synthetic video test suite
+        run: |
+          python test_dissect.py -v

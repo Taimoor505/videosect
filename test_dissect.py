@@ -1,25 +1,14 @@
 #!/usr/bin/env python3
 """
-Unit and Integration Test Suite for Video Dissection Tool
-=========================================================
-Tests all testable components:
-- Timestamp formatting (SRT comma format vs standard dot format)
-- SRT subtitle generator correctness
-- Word-to-scene matching algorithms
-- Fallback scene detection when no cuts exist
-- Device and thread detection logic
-- CLI argument parsing defaults and overrides
-- Full end-to-end synthetic media dissection with FFmpeg
-- Verification of silent clips (confirming NO audio stream via ffprobe)
-- Verification of frame extraction naming sequence (000001.jpg)
-- Verification of scenes.json schema
-
-Prints a plain summary of what was tested and what could not be tested
-(such as live CUDA hardware execution or 3GB Demucs/Whisper weight downloads).
+Comprehensive End-to-End & Unit Test Suite (`test_dissect.py`)
+==============================================================
+Tests Phase 1, Phase 2, and Phase 3 features using real FFmpeg-generated
+synthetic videos (multi-scene, VFR, zero-cut, silent, music-only, no-audio,
+fade-to-black, and burned-in subtitle videos).
 """
 
+import csv
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -27,446 +16,386 @@ import tempfile
 import unittest
 from pathlib import Path
 
-# Import functions from dissect.py
+import ab_separate
+import benchmark_detectors
+import capcut_generator
 import dissect
-from dissect import (
-    WordTiming,
-    TranscriptSegment,
-    format_timestamp,
-    build_srt_content,
-    build_txt_content,
-    match_words_to_scenes,
-    detect_scenes,
-    detect_device,
-    get_video_info,
-    conform_video_to_cfr,
-    export_silent_clips_and_frames,
-    dissect_video
-)
 
 
-class TestFormattingAndTimestamps(unittest.TestCase):
-
-    def test_format_timestamp_dot(self):
-        self.assertEqual(format_timestamp(0.0), "00:00:00.000")
-        self.assertEqual(format_timestamp(65.123), "00:01:05.123")
-        self.assertEqual(format_timestamp(3661.050), "01:01:01.050")
-
-    def test_format_timestamp_srt_comma(self):
-        # SubRip requires comma separator between seconds and milliseconds
-        self.assertEqual(format_timestamp(0.0, srt_format=True), "00:00:00,000")
-        self.assertEqual(format_timestamp(12.345, srt_format=True), "00:00:12,345")
-
-    def test_build_srt_content(self):
-        segments = [
-            TranscriptSegment(
-                id=1,
-                start=1.2,
-                end=3.4,
-                text="Hello world",
-                words=[
-                    WordTiming("Hello", 1.2, 2.0, 0.99),
-                    WordTiming("world", 2.1, 3.4, 0.98),
-                ]
-            ),
-            TranscriptSegment(
-                id=2,
-                start=4.0,
-                end=6.0,
-                text="Second line of speech",
-                words=[]
-            )
-        ]
-        srt = build_srt_content(segments)
-        self.assertIn("1\n00:00:01,200 --> 00:00:03,400\nHello world", srt)
-        self.assertIn("2\n00:00:04,000 --> 00:00:06,000\nSecond line of speech", srt)
-
-    def test_build_txt_content(self):
-        segments = [
-            TranscriptSegment(id=1, start=0.5, end=1.5, text="Testing plain text", words=[])
-        ]
-        txt = build_txt_content(segments)
-        self.assertIn("[00:00:00.500 --> 00:00:01.500] Testing plain text", txt)
-
-
-class TestWordToSceneMatching(unittest.TestCase):
-
-    def test_matching_words_into_scenes(self):
-        scenes = [(0.0, 3.0), (3.0, 6.0)]
-        segments = [
-            TranscriptSegment(
-                id=1,
-                start=0.5,
-                end=2.5,
-                text="First shot speech",
-                words=[
-                    WordTiming("First", 0.5, 0.9, 0.95),
-                    WordTiming("shot", 1.0, 1.4, 0.96),
-                    WordTiming("speech", 1.5, 2.2, 0.98),
-                ]
-            ),
-            TranscriptSegment(
-                id=2,
-                start=3.2,
-                end=5.5,
-                text="Second scene narration",
-                words=[
-                    WordTiming("Second", 3.2, 3.7, 0.97),
-                    WordTiming("scene", 3.8, 4.3, 0.96),
-                    WordTiming("narration", 4.4, 5.2, 0.95),
-                ]
-            )
-        ]
-
-        matched = match_words_to_scenes(scenes, segments)
-        self.assertEqual(len(matched), 2)
-        # Scene 1
-        text1, words1 = matched[0]
-        self.assertEqual(text1, "First shot speech")
-        self.assertEqual(len(words1), 3)
-
-        # Scene 2
-        text2, words2 = matched[1]
-        self.assertEqual(text2, "Second scene narration")
-        self.assertEqual(len(words2), 3)
-
-    def test_silent_scene_matching(self):
-        scenes = [(0.0, 2.0), (2.0, 4.0), (4.0, 6.0)]
-        # Only speech in scene 3
-        segments = [
-            TranscriptSegment(
-                id=1,
-                start=4.2,
-                end=5.8,
-                text="Late speech",
-                words=[WordTiming("Late", 4.2, 4.8, 0.9), WordTiming("speech", 4.9, 5.6, 0.9)]
-            )
-        ]
-        matched = match_words_to_scenes(scenes, segments)
-        self.assertEqual(matched[0][0], "")  # Scene 1 silent
-        self.assertEqual(matched[1][0], "")  # Scene 2 silent
-        self.assertEqual(matched[2][0], "Late speech")  # Scene 3 has text
-
-
-class TestSceneFallback(unittest.TestCase):
-
-    def test_fallback_when_no_cuts_detected(self):
-        # A dummy non-existent video file should trigger fallback to single clip
-        scenes = detect_scenes(Path("/non_existent.mp4"), total_duration=8.5)
-        self.assertEqual(len(scenes), 1)
-        self.assertEqual(scenes[0], (0.0, 8.5))
-
-
-class TestDeviceDetection(unittest.TestCase):
-
-    def test_explicit_cpu(self):
-        dev, compute, threads = detect_device("cpu")
-        self.assertEqual(dev, "cpu")
-        self.assertEqual(compute, "int8")
-        self.assertGreaterEqual(threads, 1)
-
-    def test_explicit_cuda(self):
-        dev, compute, _ = detect_device("cuda")
-        self.assertEqual(dev, "cuda")
-        self.assertEqual(compute, "float16")
-
-
-class TestCapCutAndNleExport(unittest.TestCase):
-
-    def setUp(self):
-        self.mock_scenes_data = {
-            "video_name": "test_project",
-            "source_file": "test_project.mp4",
-            "total_duration": 5.0,
-            "fps": 30.0,
-            "clip_count": 2,
-            "scenes": [
-                {
-                    "clip_id": "clip_001",
-                    "file": "clips/clip_001.mp4",
-                    "duration": 2.5,
-                    "frame_count": 75,
-                    "spoken_text": "First scene dialogue"
-                },
-                {
-                    "clip_id": "clip_002",
-                    "file": "clips/clip_002.mp4",
-                    "duration": 2.5,
-                    "frame_count": 75,
-                    "spoken_text": "Second scene dialogue"
-                }
-            ]
-        }
-        self.mock_transcript_data = {
-            "segments": [
-                {"id": 1, "start": 0.5, "end": 2.0, "text": "First scene dialogue"},
-                {"id": 2, "start": 3.0, "end": 4.5, "text": "Second scene dialogue"}
-            ]
-        }
-
-    def test_capcut_draft_content_schema(self):
-        import capcut_generator
-        draft = capcut_generator.generate_capcut_draft_content(
-            self.mock_scenes_data,
-            self.mock_transcript_data
-        )
-        self.assertIn("tracks", draft)
-        self.assertIn("materials", draft)
-        self.assertIn("duration", draft)
-        # CapCut stores time in microseconds: 5.0s -> 5,000,000 us
-        self.assertEqual(draft["duration"], 5_000_000)
-
-        # 4 tracks: Video, Voice Audio, Music Audio, Subtitle Text
-        track_types = [t["type"] for t in draft["tracks"]]
-        self.assertIn("video", track_types)
-        self.assertIn("audio", track_types)
-        self.assertIn("text", track_types)
-
-        # Video track should have 2 segments
-        video_track = next(t for t in draft["tracks"] if t["type"] == "video")
-        self.assertEqual(len(video_track["segments"]), 2)
-
-    def test_capcut_meta_info(self):
-        import capcut_generator
-        meta = capcut_generator.generate_capcut_draft_meta_info(
-            self.mock_scenes_data,
-            "TEST_DRAFT_ID_123"
-        )
-        self.assertEqual(meta["draft_id"], "TEST_DRAFT_ID_123")
-        self.assertEqual(meta["draft_name"], "test_project")
-        self.assertEqual(meta["tm_duration"], 5_000_000)
-
-    def test_universal_fcpxml_structure(self):
-        import capcut_generator
-        xml = capcut_generator.generate_universal_fcpxml(
-            self.mock_scenes_data,
-            self.mock_transcript_data
-        )
-        self.assertIn("<xmeml", xml)
-        self.assertIn("<sequence", xml)
-        self.assertIn("clip_001.mp4", xml)
-        self.assertIn("voice.wav", xml)
-        self.assertIn("music.wav", xml)
-
-
-class TestWatermarkAndHighAccuracyClipping(unittest.TestCase):
-
-    def test_watermark_delogo_presets_and_custom_coords(self):
-        from dissect import build_watermark_delogo_filter
-
-        # None mode returns (None, None)
-        filt_none, box_none = build_watermark_delogo_filter("none", 1920, 1080)
-        self.assertIsNone(filt_none)
-        self.assertIsNone(box_none)
-
-        # Bottom-right preset
-        filt_br, box_br = build_watermark_delogo_filter("bottom-right", 1920, 1080)
-        self.assertIsNotNone(filt_br)
-        self.assertIn("delogo=x=", filt_br)
-        self.assertEqual(box_br["mode"], "bottom-right")
-        self.assertGreater(box_br["x"], 1000)
-        self.assertGreater(box_br["y"], 800)
-
-        # Explicit x,y,w,h custom bounding box
-        filt_custom, box_custom = build_watermark_delogo_filter("480,300,120,40", 640, 360)
-        self.assertEqual(filt_custom, "delogo=x=480:y=300:w=120:h=40")
-        self.assertEqual(box_custom["w"], 120)
-        self.assertEqual(box_custom["h"], 40)
-
-    def test_speech_boundary_snapping_and_frame_quantization(self):
-        from dissect import refine_scenes_with_speech_and_frames
-
-        # Suppose a visual cut is detected at 2.02s, right inside a spoken word (1.90s -> 2.12s)
-        raw_scenes = [(0.0, 2.02), (2.02, 4.0)]
-        segments = [
-            TranscriptSegment(
-                id=1,
-                start=0.5,
-                end=2.12,
-                text="Speaking across cut",
-                words=[
-                    WordTiming("Speaking", 0.5, 1.2, 0.99),
-                    WordTiming("across", 1.3, 1.85, 0.98),
-                    WordTiming("cut", 1.90, 2.12, 0.97),
-                ]
-            )
-        ]
-
-        refined = refine_scenes_with_speech_and_frames(
-            scenes=raw_scenes,
-            segments=segments,
-            fps=25.0,
-            snap_to_speech=True,
-            snap_tolerance_sec=0.22
-        )
-        self.assertEqual(len(refined), 2)
-        # Cut should snap to 2.12s (end of word "cut") and quantize to 25fps grid (53/25 = 2.12s)
-        self.assertAlmostEqual(refined[0][1], 2.12, places=2)
-        self.assertEqual(refined[0][1], refined[1][0])
-
-
-class TestSyntheticMediaIntegration(unittest.TestCase):
+def generate_synthetic_video(
+    out_path: Path,
+    mode: str = "standard",
+    fps: int = 30
+) -> Path:
     """
-    Creates a real synthetic MP4 with FFmpeg and runs the complete pipeline.
+    Generate synthetic test videos with FFmpeg:
+      - 'standard': 2.0s two-scene video (1.0s red + 1.0s blue) with amplitude-modulated speech-like bursts
+      - 'vfr': variable frame rate video with timestamp jitter
+      - 'zero_cut': 1.5s single continuous solid green shot
+      - 'silent': 1.5s video with silent audio track (anullsrc)
+      - 'music_only': 2.0s video with steady 440Hz sine wave music tone (no speech modulation)
+      - 'no_audio': 1.5s video with NO audio stream at all (-an)
+      - 'subtitled': 2.0s video with high-contrast burned-in subtitle text in bottom region
     """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if mode == "standard":
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=red:s=320x240:r={fps}:d=1.0",
+            "-f", "lavfi", "-i", f"color=c=blue:s=320x240:r={fps}:d=1.0",
+            "-f", "lavfi", "-i", "aevalsrc='0.4*sin(2*PI*300*t)*(gt(sin(2*PI*3*t),0))':s=44100:d=2.0",
+            "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+            "-map", "[v]", "-map", "2:a",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            str(out_path)
+        ]
+    elif mode == "vfr":
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=c=crimson:s=320x240:r=15:d=1.0",
+            "-f", "lavfi", "-i", "color=c=navy:s=320x240:r=30:d=1.0",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=2.0",
+            "-filter_complex", "[0:v]settb=AVTB,setpts='N/15/TB'[v0];[1:v]settb=AVTB,setpts='(1.0+N/30)/TB'[v1];[v0][v1]concat=n=2:v=1:a=0[v]",
+            "-map", "[v]", "-map", "2:a",
+            "-vsync", "vfr", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            str(out_path)
+        ]
+    elif mode == "zero_cut":
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=seagreen:s=320x240:r={fps}:d=1.5",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=1.5",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            str(out_path)
+        ]
+    elif mode == "silent":
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=purple:s=320x240:r={fps}:d=1.5",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=1.5",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            str(out_path)
+        ]
+    elif mode == "music_only":
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=teal:s=320x240:r={fps}:d=2.0",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=2.0",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            str(out_path)
+        ]
+    elif mode == "no_audio":
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=orange:s=320x240:r={fps}:d=1.5",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an",
+            str(out_path)
+        ]
+    elif mode == "subtitled":
+        # Render burned-in subtitle frames using Pillow + OpenCV so it works even without ffmpeg libfreetype
+        import cv2
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFont
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(str(out_path), fourcc, float(fps), (640, 360))
+        for f_i in range(fps * 2):
+            img = Image.new("RGB", (640, 360), color=(20, 25, 40))
+            draw = ImageDraw.Draw(img)
+            # Draw large clear white text in bottom subtitle zone
+            draw.rectangle([100, 275, 540, 335], fill=(0, 0, 0))
+            draw.text((140, 295), "HELLO SUBTITLE WORLD 2026", fill=(255, 255, 255))
+            bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            writer.write(bgr)
+        writer.release()
+        return out_path
+    else:
+        raise ValueError(f"Unknown synthetic video mode: {mode}")
+
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    return out_path
+
+
+class TestPhase1CoreAndHonesty(unittest.TestCase):
+    """Phase 1 tests: CapCut honesty, OpenTimelineIO export, edge-case inputs, frame options, caching."""
 
     @classmethod
     def setUpClass(cls):
-        cls.temp_dir = Path(tempfile.mkdtemp(prefix="test_dissect_"))
-        cls.video_path = cls.temp_dir / "synthetic_test.mp4"
-        cls.output_dir = cls.temp_dir / "output"
-
-        # Generate a 3-second synthetic video with a color switch at 1.5s (scene cut) and a 440Hz sine audio tone
-        # Scene 1: red 0.0 - 1.5s
-        # Scene 2: blue 1.5 - 3.0s
-        gen_cmd = [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", "color=c=red:s=320x240:d=1.5",
-            "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=1.5",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=3.0",
-            "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
-            "-map", "[v]",
-            "-map", "2:a",
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-r", "25",
-            str(cls.video_path)
-        ]
-        res = subprocess.run(gen_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode != 0:
-            raise RuntimeError(f"Failed to generate synthetic test video: {res.stderr}")
+        cls.tmp_root = Path(tempfile.mkdtemp(prefix="videosect_p1_"))
+        cls.std_video = generate_synthetic_video(cls.tmp_root / "std_test.mp4", mode="standard")
 
     @classmethod
     def tearDownClass(cls):
-        shutil.rmtree(cls.temp_dir, ignore_errors=True)
+        shutil.rmtree(cls.tmp_root, ignore_errors=True)
 
-    def test_synthetic_video_probe(self):
-        info = get_video_info(self.video_path)
-        self.assertAlmostEqual(info["duration"], 3.0, delta=0.5)
-        self.assertEqual(info["width"], 320)
-        self.assertEqual(info["height"], 240)
-        self.assertTrue(info["has_audio"])
-
-    def test_full_pipeline_synthetic_run(self):
-        # Run dissection in fast mode
-        out_root = dissect_video(
-            video_path=str(self.video_path),
-            output_dir=str(self.output_dir),
+    def test_01_capcut_honesty_and_otio_exports(self):
+        """Verify capcut_ready/ default, experimental --capcut-draft warning/notes, and OTIO round-trip."""
+        out_dir = self.tmp_root / "out_std"
+        proj_dir = dissect.dissect_video(
+            video_path=str(self.std_video),
+            output_dir=str(out_dir),
             fast=True,
-            threshold=20.0,
-            target_fps=25.0
+            capcut=True,
+            capcut_draft=True,
+            export_formats=["fcp7xml", "edl", "fcpxml"],
+            watermark="bottom-right"
         )
 
-        expected_folder = self.output_dir / "synthetic_test"
-        self.assertTrue(expected_folder.exists())
+        # 1. Verify capcut_ready/ default export and honest IMPORT.md
+        ready_dir = proj_dir / "capcut_ready"
+        self.assertTrue(ready_dir.exists())
+        self.assertTrue((ready_dir / "voice.wav").exists())
+        self.assertTrue((ready_dir / "music.wav").exists())
+        self.assertTrue((ready_dir / "captions.srt").exists())
+        self.assertTrue((ready_dir / "clip_001.mp4").exists())
+        import_md = (ready_dir / "IMPORT.md").read_text(encoding="utf-8")
+        self.assertNotIn("1-Click", import_md)
+        self.assertNotIn("1-click", import_md)
+        self.assertIn("Manual Assembly Steps", import_md)
 
-        # 1. Verify audio stems
-        voice_wav = expected_folder / "audio" / "voice.wav"
-        music_wav = expected_folder / "audio" / "music.wav"
-        self.assertTrue(voice_wav.exists(), "voice.wav must exist")
-        self.assertTrue(music_wav.exists(), "music.wav must exist")
-        self.assertGreater(voice_wav.stat().st_size, 1000)
-        self.assertGreater(music_wav.stat().st_size, 1000)
+        # 2. Verify --capcut-draft creates draft_content.json and capcut_draft_notes
+        draft_dir = proj_dir / "capcut_project"
+        self.assertTrue((draft_dir / "draft_content.json").exists())
+        self.assertTrue((draft_dir / "capcut_draft_notes").exists())
+        notes_txt = (draft_dir / "capcut_draft_notes").read_text(encoding="utf-8")
+        self.assertIn("NOT Validated Against", notes_txt)
 
-        # 2. Verify transcripts
-        txt_path = expected_folder / "transcript" / "transcript.txt"
-        srt_path = expected_folder / "transcript" / "transcript.srt"
-        json_path = expected_folder / "transcript" / "transcript.json"
+        # 3. Verify OpenTimelineIO exports exist and were round-trip validated
+        self.assertTrue((proj_dir / "timeline_fcp7.xml").exists())
+        self.assertTrue((proj_dir / "timeline.edl").exists())
+        self.assertTrue((proj_dir / "timeline.fcpxml").exists())
 
-        self.assertTrue(txt_path.exists(), "transcript.txt must exist")
-        self.assertTrue(srt_path.exists(), "transcript.srt must exist")
-        self.assertTrue(json_path.exists(), "transcript.json must exist")
+        sc_data = json.loads((proj_dir / "scenes.json").read_text(encoding="utf-8"))
+        self.assertIn("nle_exports", sc_data)
+        for fmt in ("fcp7xml", "edl", "fcpxml"):
+            self.assertTrue(sc_data["nle_exports"][fmt]["validated"])
 
-        with open(json_path, "r", encoding="utf-8") as f:
-            transcript_data = json.load(f)
-        self.assertIn("segments", transcript_data)
+        # 4. Verify frame count in clips/ and frames/ matches scenes.json
+        for sc in sc_data["scenes"]:
+            clip_frames_dir = proj_dir / sc["frames_dir"]
+            jpgs = list(clip_frames_dir.glob("*.jpg"))
+            self.assertEqual(sc["frame_count"], len(jpgs))
 
-        # 3. Verify silent clips
-        clips_dir = expected_folder / "clips"
-        clips = sorted(list(clips_dir.glob("clip_*.mp4")))
-        self.assertGreaterEqual(len(clips), 1, "Must produce at least one clip")
+    def test_02_stage_caching_and_force_redo(self):
+        """Verify stage caching skips finished stages and --force recomputes them."""
+        out_dir = self.tmp_root / "out_std"
+        # Second run without --force should reuse cached stages
+        proj_dir = dissect.dissect_video(
+            video_path=str(self.std_video),
+            output_dir=str(out_dir),
+            fast=True,
+            keep_temp=True,
+            force=False
+        )
+        sc_data = json.loads((proj_dir / "scenes.json").read_text(encoding="utf-8"))
+        self.assertIn("audio_separation", sc_data["stages_cached"])
+        self.assertIn("transcription", sc_data["stages_cached"])
 
-        # Crucial requirement: Every clip must have NO audio track
-        first_clip = clips[0]
-        clip_info = get_video_info(first_clip)
-        self.assertFalse(clip_info["has_audio"], f"Clip {first_clip.name} must have NO audio track (-an)")
+        # Run with --force should clear stages_cached
+        proj_dir_forced = dissect.dissect_video(
+            video_path=str(self.std_video),
+            output_dir=str(out_dir),
+            fast=True,
+            force=True
+        )
+        sc_forced = json.loads((proj_dir_forced / "scenes.json").read_text(encoding="utf-8"))
+        self.assertEqual(sc_forced["stages_cached"], [])
 
-        # 4. Verify frames per clip
-        frames_root = expected_folder / "frames"
-        clip_frames_dir = frames_root / first_clip.stem
-        self.assertTrue(clip_frames_dir.exists())
-        jpgs = sorted(list(clip_frames_dir.glob("*.jpg")))
-        self.assertGreater(len(jpgs), 0, "Clip frames directory must contain extracted JPEG frames")
-        # Verify 1-indexed naming: 000001.jpg
-        self.assertEqual(jpgs[0].name, "000001.jpg")
+    def test_03_vfr_zero_cut_silent_music_and_no_audio_videos(self):
+        """Phase 1.5: Test VFR input, zero-cut video, silent video, music-only video, and no-audio video."""
+        # 1. VFR input
+        vfr_vid = generate_synthetic_video(self.tmp_root / "vfr.mp4", mode="vfr")
+        vfr_out = dissect.dissect_video(str(vfr_vid), str(self.tmp_root / "out_vfr"), fast=True)
+        vfr_sc = json.loads((vfr_out / "scenes.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(vfr_sc["clip_count"], 1)
+        for sc in vfr_sc["scenes"]:
+            self.assertEqual(sc["frame_count"], len(list((vfr_out / sc["frames_dir"]).glob("*.jpg"))))
 
-        # 5. Verify scenes.json index schema
-        scenes_json_file = expected_folder / "scenes.json"
-        self.assertTrue(scenes_json_file.exists(), "scenes.json must exist")
-        with open(scenes_json_file, "r", encoding="utf-8") as f:
-            scenes_data = json.load(f)
+        # 2. Zero-cut video
+        zc_vid = generate_synthetic_video(self.tmp_root / "zero_cut.mp4", mode="zero_cut")
+        zc_out = dissect.dissect_video(str(zc_vid), str(self.tmp_root / "out_zc"), fast=True)
+        zc_sc = json.loads((zc_out / "scenes.json").read_text(encoding="utf-8"))
+        self.assertEqual(zc_sc["clip_count"], 1)
 
-        self.assertIn("video_name", scenes_data)
-        self.assertIn("scenes", scenes_data)
-        self.assertGreater(len(scenes_data["scenes"]), 0)
+        # 3. Silent video (no speech -> 0 transcript segments)
+        sil_vid = generate_synthetic_video(self.tmp_root / "silent.mp4", mode="silent")
+        sil_out = dissect.dissect_video(str(sil_vid), str(self.tmp_root / "out_sil"), fast=True)
+        sil_tr = json.loads((sil_out / "transcript" / "transcript.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(sil_tr["segments"]), 0)
 
-        first_scene = scenes_data["scenes"][0]
-        required_keys = [
-            "clip_id", "file", "frames_dir", "start_time", "end_time",
-            "start_timestamp", "end_timestamp", "duration", "frame_count",
-            "spoken_text", "spoken_words"
+        # 4. Music-only video (sine tone -> 0 transcript segments, no hallucination)
+        mus_vid = generate_synthetic_video(self.tmp_root / "music_only.mp4", mode="music_only")
+        mus_out = dissect.dissect_video(str(mus_vid), str(self.tmp_root / "out_mus"), fast=True)
+        mus_tr = json.loads((mus_out / "transcript" / "transcript.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(mus_tr["segments"]), 0)
+
+        # 5. Video with NO audio track at all (-an)
+        noa_vid = generate_synthetic_video(self.tmp_root / "no_audio.mp4", mode="no_audio")
+        noa_out = dissect.dissect_video(str(noa_vid), str(self.tmp_root / "out_noa"), fast=True)
+        noa_sc = json.loads((noa_out / "scenes.json").read_text(encoding="utf-8"))
+        self.assertFalse(noa_sc["has_audio"])
+        self.assertTrue((noa_out / "audio" / "voice.wav").exists())
+        self.assertTrue((noa_out / "audio" / "music.wav").exists())
+        noa_tr = json.loads((noa_out / "transcript" / "transcript.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(noa_tr["segments"]), 0)
+
+    def test_04_frames_options_and_disk_estimate(self):
+        """Test --frames png, --frames none, --frames-every N, --jpg-quality, and disk estimation."""
+        est = dissect.estimate_frame_disk_space(10.0, 30.0, 1920, 1080, "png", frames_every=2, output_dir=self.tmp_root)
+        self.assertEqual(est["estimated_frames"], 150)
+        self.assertTrue(est["sufficient"])
+
+        # Test --frames png & --frames-every 5
+        png_out = dissect.dissect_video(
+            str(self.std_video), str(self.tmp_root / "out_png"),
+            fast=True, frames_format="png", frames_every=5, force=True
+        )
+        png_sc = json.loads((png_out / "scenes.json").read_text(encoding="utf-8"))
+        for sc in png_sc["scenes"]:
+            pngs = list((png_out / sc["frames_dir"]).glob("*.png"))
+            self.assertEqual(len(pngs), sc["exported_frame_count"])
+            self.assertEqual(len(pngs), 6)  # 30 frames / 5 = 6 PNGs
+
+        # Test --frames none
+        none_out = dissect.dissect_video(
+            str(self.std_video), str(self.tmp_root / "out_none"),
+            fast=True, frames_format="none", force=True
+        )
+        none_sc = json.loads((none_out / "scenes.json").read_text(encoding="utf-8"))
+        for sc in none_sc["scenes"]:
+            self.assertEqual(sc["exported_frame_count"], 0)
+
+
+class TestPhase2AndPhase3Features(unittest.TestCase):
+    """Phase 2 & 3 tests: Detectors, benchmark, recut, interpolation, assemble, analysis, keyframes, OCR, batch."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_root = Path(tempfile.mkdtemp(prefix="videosect_p23_"))
+        cls.std_video = generate_synthetic_video(cls.tmp_root / "std_p23.mp4", mode="standard")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp_root, ignore_errors=True)
+
+    def test_05_word_timestamp_interpolation_and_hallucination_guard(self):
+        """Phase 2.3: Missing word timestamps (numbers/symbols) are interpolated and marked interpolated=True."""
+        raw_words = [
+            {"word": "Revenue", "start": 0.2, "end": 0.6, "probability": 0.98},
+            {"word": "grew", "start": 0.65, "end": 0.9, "probability": 0.96},
+            {"word": "100%", "start": None, "end": None, "probability": None},
+            {"word": "in", "start": 1.3, "end": 1.45, "probability": 0.99},
+            {"word": "2026", "start": None, "end": None, "probability": None},
         ]
-        for key in required_keys:
-            self.assertIn(key, first_scene, f"Key '{key}' missing from scene record")
+        interp = dissect.interpolate_missing_word_timestamps(
+            raw_words, seg_start=0.2, seg_end=1.9, segment_text="Revenue grew 100% in 2026"
+        )
+        self.assertEqual(len(interp), 5)
+        self.assertFalse(interp[0].interpolated)
+        self.assertTrue(interp[2].interpolated)
+        self.assertGreaterEqual(interp[2].start, 0.9)
+        self.assertLessEqual(interp[2].end, 1.3)
+        self.assertTrue(interp[4].interpolated)
+        self.assertAlmostEqual(interp[4].end, 1.9, places=2)
 
-        self.assertEqual(first_scene["frame_count"], len(jpgs))
+        # Hallucination guard test
+        self.assertTrue(dissect.is_hallucinated_segment("Thank you for watching!", -38.0))
+        self.assertTrue(dissect.is_hallucinated_segment("Normal speech", -52.0))
+        self.assertFalse(dissect.is_hallucinated_segment("Welcome to the breakdown", -18.0))
 
-        # 6. Verify default CapCut project draft & ZIP bundle creation
-        capcut_draft_file = expected_folder / "capcut_project" / "draft_content.json"
-        capcut_zip_file = expected_folder / "CapCut_Project_synthetic_test.zip"
-        self.assertTrue(capcut_draft_file.exists(), "Default CapCut draft_content.json must be generated")
-        self.assertTrue(capcut_zip_file.exists(), "Default CapCut_Project_synthetic_test.zip must be generated")
+    def test_06_detector_benchmark_and_merge_mode(self):
+        """Phase 2.1: Test --detector merge/transnet fallback and benchmark_detectors.py."""
+        cuts_txt = self.tmp_root / "cuts.txt"
+        cuts_txt.write_text("1.000\n", encoding="utf-8")
+        rows = benchmark_detectors.benchmark_video_detectors(
+            video_path=self.std_video,
+            cuts_file=cuts_txt,
+            detectors=["content", "ensemble", "merge"],
+            tolerance_sec=0.25
+        )
+        self.assertEqual(len(rows), 3)
+        for r in rows:
+            self.assertEqual(r["f1"], 1.0)
 
+    def test_07_review_html_recut_and_assemble_with_frame_dropping(self):
+        """Phase 2.2 & 3.1: Test review.html, videosect recut (--merge/--split), and videosect assemble."""
+        proj_dir = dissect.dissect_video(
+            str(self.std_video), str(self.tmp_root / "out_recut"),
+            fast=True, describe=True, shot_type=True, denoise=True, loudnorm=True
+        )
+        self.assertTrue((proj_dir / "review.html").exists())
+        self.assertTrue((proj_dir / "analysis.json").exists())
+        self.assertTrue((proj_dir / "analysis.html").exists())
+        self.assertTrue((proj_dir / "keyframes" / "storyboard.jpg").exists())
 
-def print_test_coverage_report():
-    print("""
-================================================================================
-                    VIDEO DISSECTION TOOL TEST SUITE
-================================================================================
+        sc_initial = json.loads((proj_dir / "scenes.json").read_text(encoding="utf-8"))
+        self.assertEqual(sc_initial["clip_count"], 2)
+        self.assertTrue(sc_initial["scenes"][0]["description"]["experimental"])
+        self.assertTrue(sc_initial["scenes"][0]["shot_type"]["experimental"])
 
-WHAT WAS TESTED:
-  [PASS] SubRip (.srt) comma millisecond formatting (00:00:01,234)
-  [PASS] Timestamped plain-text transcript generator (.txt)
-  [PASS] Word-level timestamp JSON structure and serialization (.json)
-  [PASS] Word-to-scene matching algorithm (boundary tolerance, multi-word alignment)
-  [PASS] Silent scene detection and text isolation
-  [PASS] Scene cut fallback mechanism (single-clip fallback when 0 cuts found)
-  [PASS] High-accuracy speech-boundary snapping & exact frame-grid quantization
-  [PASS] Spatial watermark delogo filter builder (auto, corner presets, x,y,w,h)
-  [PASS] Device detection and compute type selection (CPU int8 vs CUDA float16)
-  [PASS] FFmpeg Constant Frame Rate (CFR) conform filter generation
-  [PASS] FFmpeg exact frame boundary silent re-encoding (-an audio track removal)
-  [PASS] FFmpeg frame-accurate extraction into frames/clip_XXX/000001.jpg
-  [PASS] scenes.json schema validation and property linkage (frame_count, timing)
-  [PASS] Default CapCut draft_content.json, draft_meta_info.json & CapCut ZIP export
-  [PASS] Universal FCPXML/Premiere XML timeline generation (timeline.xml)
-  [PASS] End-to-end integration test with synthetic dual-scene color-cut video
+        # Recut: merge clips 1 and 2 -> 1 clip
+        dissect.recut_project(proj_dir, merge_specs=["1,2"])
+        sc_merged = json.loads((proj_dir / "scenes.json").read_text(encoding="utf-8"))
+        self.assertEqual(sc_merged["clip_count"], 1)
 
-WHAT COULD NOT BE TESTED LOCALLY:
-  [NOTE] Live NVIDIA CUDA GPU hardware execution (requires physical GPU instance,
-         verified via Colab notebook environment).
-  [NOTE] Live network download of 3GB Demucs htdemucs_ft checkpoint and
-         Whisper large-v3 weights (tested with mock audio & fallback filter path
-         to ensure zero-dependency local testability).
-================================================================================
-""")
+        # Recut: split clip 1 at 1.0s -> back to 2 clips
+        dissect.recut_project(proj_dir, split_specs=["1:1.0"])
+        sc_split = json.loads((proj_dir / "scenes.json").read_text(encoding="utf-8"))
+        self.assertEqual(sc_split["clip_count"], 2)
+
+        # Assemble with dropped frames from clip_001 + full clip_002
+        sel_path = self.tmp_root / "selection.json"
+        sel_path.write_text(json.dumps({
+            "include_voice": True,
+            "include_music": True,
+            "clips": [
+                {"clip_id": "clip_001", "drop_frames": [1, 2, 3, 4, 5]},
+                "clip_002"
+            ]
+        }), encoding="utf-8")
+        rebuilt_mp4 = self.tmp_root / "rebuilt.mp4"
+        dissect.assemble_video_from_selection(proj_dir, sel_path, rebuilt_mp4)
+        self.assertTrue(rebuilt_mp4.exists())
+        info = dissect.get_video_info(rebuilt_mp4)
+        self.assertTrue(info["has_video"])
+        self.assertAlmostEqual(info["duration"], (25 + 30) / 30.0, delta=0.18)
+
+    def test_08_ab_separate_and_ocr_subs_and_batch_mode(self):
+        """Phase 2.4, 3.5 & 3.6: Test ab_separate.py, --ocr-subs, and batch folder mode."""
+        # 1. A/B voice separation
+        ab_dir = self.tmp_root / "ab_out"
+        ab_rep = ab_separate.run_ab_separation(self.std_video, ab_dir, fast=True)
+        self.assertTrue((ab_dir / "voice_demucs.wav").exists())
+        self.assertTrue((ab_dir / "voice_roformer.wav").exists())
+        self.assertIn("demucs", ab_rep["models"])
+
+        # 2. Burned-in subtitle OCR (--ocr-subs)
+        sub_vid = generate_synthetic_video(self.tmp_root / "subtitled.mp4", mode="subtitled")
+        ocr_json, ocr_srt = dissect.detect_and_ocr_burned_subtitles(
+            sub_vid, self.tmp_root / "ocr_out", sample_interval_sec=0.5
+        )
+        self.assertIsNotNone(ocr_json)
+        self.assertTrue(ocr_json.exists())
+        ocr_data = json.loads(ocr_json.read_text(encoding="utf-8"))
+        self.assertFalse(ocr_data["video_modified"])
+        self.assertGreaterEqual(ocr_data["subtitle_count"], 1)
+        self.assertIn("HELLO", ocr_data["subtitles"][0]["text"].upper())
+
+        # 3. Batch mode folder processing + summary.csv
+        batch_in = self.tmp_root / "batch_videos"
+        batch_in.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(self.std_video, batch_in / "vid_a.mp4")
+        summary_csv = dissect.dissect_batch_folder(
+            batch_in, self.tmp_root / "batch_out",
+            {"fast": True, "capcut": True, "frames_format": "none"}
+        )
+        self.assertTrue(summary_csv.exists())
+        with open(summary_csv, "r", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "success")
 
 
 if __name__ == "__main__":
-    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    print_test_coverage_report()
-    if not result.wasSuccessful():
-        sys.exit(1)
+    unittest.main(verbosity=2)
