@@ -83,7 +83,7 @@ The tool automatically detects CPU environments and configures optimal settings:
 #### Installation:
 ```bash
 # Clone the repository
-git clone https://github.com/taimoor8x/video-dissection.git
+git clone https://github.com/Taimoor505/videosect.git
 cd video-dissection
 
 # Create and activate virtual environment
