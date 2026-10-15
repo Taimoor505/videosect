@@ -1,0 +1,96 @@
+{
+  "video_name": "interview_demo",
+  "source_file": "interview_demo.mp4",
+  "total_duration": 4.0,
+  "fps": 25.0,
+  "clip_count": 2,
+  "models": {
+    "whisper": "base",
+    "demucs": "htdemucs",
+    "device": "cpu"
+  },
+  "scenes": [
+    {
+      "clip_id": "clip_001",
+      "file": "clips/clip_001.mp4",
+      "frames_dir": "frames/clip_001",
+      "start_time": 0.0,
+      "end_time": 2.0,
+      "start_timestamp": "00:00:00.000",
+      "end_timestamp": "00:00:02.000",
+      "duration": 2.0,
+      "frame_count": 50,
+      "spoken_text": "Welcome to the video breakdown",
+      "spoken_words": [
+        {
+          "word": "Welcome",
+          "start": 0.3,
+          "end": 0.8,
+          "probability": 0.98
+        },
+        {
+          "word": "to",
+          "start": 0.82,
+          "end": 1.0,
+          "probability": 0.99
+        },
+        {
+          "word": "the",
+          "start": 1.02,
+          "end": 1.18,
+          "probability": 0.97
+        },
+        {
+          "word": "video",
+          "start": 1.2,
+          "end": 1.6,
+          "probability": 0.96
+        },
+        {
+          "word": "breakdown",
+          "start": 1.65,
+          "end": 2.2,
+          "probability": 0.95
+        }
+      ]
+    },
+    {
+      "clip_id": "clip_002",
+      "file": "clips/clip_002.mp4",
+      "frames_dir": "frames/clip_002",
+      "start_time": 2.0,
+      "end_time": 4.0,
+      "start_timestamp": "00:00:02.000",
+      "end_timestamp": "00:00:04.000",
+      "duration": 2.0,
+      "frame_count": 50,
+      "spoken_text": "Notice the seamless scene",
+      "spoken_words": [
+        {
+          "word": "Notice",
+          "start": 2.6,
+          "end": 3.0,
+          "probability": 0.97
+        },
+        {
+          "word": "the",
+          "start": 3.05,
+          "end": 3.2,
+          "probability": 0.98
+        },
+        {
+          "word": "seamless",
+          "start": 3.25,
+          "end": 3.8,
+          "probability": 0.94
+        },
+        {
+          "word": "scene",
+          "start": 3.85,
+          "end": 4.2,
+          "probability": 0.96
+        }
+      ]
+    }
+  ]
+}

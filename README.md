@@ -1,11 +1,234 @@
-<div align="center">
+# Video Dissection Tool 🎬
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+An automated engineering pipeline that takes one short video and breaks it into modular components: **frame-accurate silent video clips**, **isolated voice and music audio stems**, **image sequences per clip**, and **word-aligned timestamped transcripts**.
 
-  <h1>Built with AI Studio</h2>
+Designed for video creators and engineers who rebuild or remix videos from granular components.
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+---
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## 📁 Output Folder Structure
 
-</div>
+Every dissected video generates an isolated output folder in `output/<video_name>/`:
+
+```
+output/<video_name>/
+├── audio/
+│   ├── voice.wav              # Isolated speech track (Demucs vocals stem)
+│   └── music.wav              # Isolated background music / ambient track
+├── transcript/
+│   ├── transcript.txt         # Timestamped readable text
+│   ├── transcript.srt         # SubRip formatted subtitles (HH:MM:SS,mmm)
+│   └── transcript.json        # Word-level timestamps & segment probabilities
+├── clips/
+│   ├── clip_001.mp4           # Silent re-encoded shot clip (no audio track, -an)
+│   ├── clip_002.mp4
+│   └── ...
+├── frames/
+│   ├── clip_001/
+│   │   ├── 000001.jpg         # Frame-accurate image sequence (1-indexed)
+│   │   ├── 000002.jpg
+│   │   └── ...
+│   └── clip_002/
+│       ├── 000001.jpg
+│       └── ...
+└── scenes.json                # Complete scene index linking clips, timing, & speech
+```
+
+---
+
+## ⚡ Accuracy Over Speed by Default
+
+By default, the tool selects maximum precision:
+- **Audio Stem Separation**: Demucs `htdemucs_ft` fine-tuned model (`--two-stems=vocals`)
+- **Speech Transcription**: Whisper `large-v3` via `faster-whisper` with `vad_filter=True` and `word_timestamps=True` run directly on `voice.wav`
+- **Scene Cut Detection**: PySceneDetect `ContentDetector` with a custom threshold (default: `27.0`) and automatic fallback (treats entire video as 1 clip if no cut is found)
+- **CFR Conformance**: Pre-conforms variable-frame-rate (VFR) videos to constant frame rate (CFR) to prevent audio/video timestamp drift and frame count divergence
+- **Exact Frame Boundaries**: Re-encodes clips (`-c:v libx264 -crf 18 -an`) rather than keyframe-snapped stream copying (`-c copy`), guaranteeing zero cut-point drift
+- **Burned-In Subtitles**: Left untouched in the video exactly as they are. No OCR or extraction is performed. The transcript is derived purely from speech audio.
+
+Use `--fast` for a quick draft run using lighter models (`base` whisper, standard `htdemucs`).
+
+---
+
+## 🚀 Quick Start
+
+### 1. Google Colab (GPU Recommended)
+A ready-to-run Jupyter notebook is included in [`video_dissection.ipynb`](./video_dissection.ipynb):
+1. Open [`video_dissection.ipynb`](./video_dissection.ipynb) in [Google Colab](https://colab.research.google.com/).
+2. Select **Runtime** → **Change runtime type** → **T4 GPU**.
+3. Run the cells in order:
+   - Install dependencies (`ffmpeg`, `faster-whisper`, `demucs`, `scenedetect`).
+   - Upload your video file or mount Google Drive.
+   - Run the dissection pipeline.
+   - Inspect results and download the final `output_<video_name>.zip` directly to your computer.
+
+---
+
+### 2. Local Machine (CPU: e.g. AMD Ryzen 5600)
+The tool automatically detects CPU environments and configures optimal settings:
+- Detects available physical CPU cores (e.g. 6 cores / 12 threads)
+- Sets Whisper `compute_type="int8"` for efficient quantization on x86_64
+- Runs Demucs on CPU with multi-threading
+
+#### System Requirements:
+- Python 3.9+
+- FFmpeg (`sudo apt-get install ffmpeg` on Ubuntu/Debian, `brew install ffmpeg` on macOS, or `winget install Gyan.FFmpeg` on Windows)
+
+#### Installation:
+```bash
+# Clone the repository
+git clone https://github.com/taimoor8x/video-dissection.git
+cd video-dissection
+
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+#### Run on CPU:
+```bash
+# Accurate mode (default: large-v3 + htdemucs_ft)
+python3 dissect.py input_video.mp4
+
+# Fast mode (recommended for initial test runs on CPU)
+python3 dissect.py input_video.mp4 --fast
+```
+
+---
+
+### 3. Local Machine (NVIDIA GPU / CUDA)
+If an NVIDIA GPU with CUDA is detected, the tool automatically uses:
+- `device="cuda"`
+- `compute_type="float16"`
+- GPU acceleration for both Demucs stem isolation and Whisper transcription.
+
+```bash
+python3 dissect.py input_video.mp4 --threshold 27.0
+```
+
+---
+
+## 🛠️ Command-Line Interface (CLI) Reference
+
+```bash
+python3 dissect.py [VIDEO] [OPTIONS]
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `video` | Positional | *Required* | Path to input video file (`.mp4`, `.mov`, `.mkv`, etc.) |
+| `-o`, `--output-dir` | Path | `./output` | Root directory where output folders are created |
+| `--fast` | Flag | `False` | Enables quick mode (`base` whisper, standard `htdemucs`) |
+| `--threshold` | Float | `27.0` | PySceneDetect scene cut sensitivity threshold |
+| `--min-scene-len` | Float | `0.5` | Minimum shot duration in seconds |
+| `--device` | String | `auto` | `auto`, `cuda` (NVIDIA GPU), or `cpu` (AMD Ryzen / Intel) |
+| `--whisper-model` | String | `large-v3` (`base` in `--fast`) | Specific faster-whisper model tag |
+| `--demucs-model` | String | `htdemucs_ft` (`htdemucs` in `--fast`) | Specific Demucs separation checkpoint |
+| `--target-fps` | Float | `30.0` | Frame rate to conform video to (prevents VFR drift) |
+| `--keep-temp` | Flag | `False` | Retains intermediate scratch files in `_temp/` |
+| `--capcut` | Flag | `False` | Automatically generates ready-to-run CapCut project draft (`draft_content.json`, `timeline.xml`) |
+
+---
+
+## 🎬 Direct CapCut Project Import Guide
+
+You can export the entire dissected project directly as a native CapCut Draft:
+- **Track 1 (Video)**: Silent scene clips pre-cut at exact shot boundaries.
+- **Track 2 (Audio)**: Isolated voice track (`voice.wav` - background sound removed).
+- **Track 3 (Audio)**: Background music & ambient sound (`music.wav`).
+- **Track 4 (Subtitles)**: Timed subtitle captions synchronized with speech.
+
+### How to Open Directly in CapCut Desktop:
+1. Export via the UI (**"Export & CapCut"** button) or run with `--capcut`:
+   ```bash
+   python3 dissect.py input_video.mp4 --capcut
+   ```
+2. Copy or extract the generated project folder into your CapCut Drafts location:
+   - **Windows**: `%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\`
+   - **macOS**: `~/Movies/CapCut/User Data/Projects/com.lveditor.draft/`
+3. Launch CapCut Desktop. The project will appear directly on your home screen with all tracks and clips ready for editing!
+
+### Universal NLE Timeline Import:
+The package also includes `timeline.xml` (FCPXML/Premiere XML) which can be imported via **File** → **Import** in CapCut, Adobe Premiere Pro, DaVinci Resolve, or Final Cut Pro.
+
+---
+
+## 📋 `scenes.json` Specification
+
+`scenes.json` links the visual clips, frame counts, exact timestamps, and spoken dialogue:
+
+```json
+{
+  "video_name": "example_interview",
+  "source_file": "example_interview.mp4",
+  "total_duration": 14.82,
+  "fps": 30.0,
+  "clip_count": 3,
+  "models": {
+    "whisper": "large-v3",
+    "demucs": "htdemucs_ft",
+    "device": "cpu"
+  },
+  "scenes": [
+    {
+      "clip_id": "clip_001",
+      "file": "clips/clip_001.mp4",
+      "frames_dir": "frames/clip_001",
+      "start_time": 0.0,
+      "end_time": 4.5,
+      "start_timestamp": "00:00:00.000",
+      "end_timestamp": "00:00:04.500",
+      "duration": 4.5,
+      "frame_count": 135,
+      "spoken_text": "Welcome to our studio demo.",
+      "spoken_words": [
+        { "word": "Welcome", "start": 0.3, "end": 0.8, "probability": 0.99 },
+        { "word": "to", "start": 0.82, "end": 0.95, "probability": 0.98 },
+        { "word": "our", "start": 0.96, "end": 1.15, "probability": 0.97 },
+        { "word": "studio", "start": 1.2, "end": 1.8, "probability": 0.99 },
+        { "word": "demo.", "start": 1.85, "end": 2.4, "probability": 0.98 }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 🧪 Verification & Test Suite
+
+Run the automated test suite with:
+
+```bash
+python3 test_dissect.py
+```
+
+### What was tested:
+1. **SubRip (.srt) Formatter**: Strict validation of millisecond comma separators (`00:00:01,234`), 1-based sequential indices, and clean subtitle blocks.
+2. **Plain-Text Transcript Generator**: Timestamp bracket format verification (`[00:00:01.200 --> 00:00:03.400] text`).
+3. **Word-Level Timestamp JSON Serialization**: Segment and nested word schema validation.
+4. **Word-to-Scene Matching Algorithm**:
+   - Verification of exact midpoint assignment inside `[scene_start, scene_end)`
+   - Boundary tolerance tests
+   - Completely silent shot verification (empty string `""` and empty word array `[]`)
+5. **Scene Cut Fallback Mechanism**:
+   - Validates that videos with 0 cuts or subtle cuts fall back safely to a single clip spanning `(0.0, total_duration)`.
+6. **Device & Thread Auto-Detection**:
+   - Auto selection of `int8` compute for CPU and `float16` for CUDA.
+   - Dynamic CPU thread assignment based on physical host cores.
+7. **FFmpeg CFR Conformance**: Ensures variable frame rate videos are conformed without timestamp drifting.
+8. **Silent Re-encoding Validation**: Uses `ffprobe` to verify that produced clips have **zero audio streams** (`-an`).
+9. **Frame Extraction Precision**: Confirms frame extraction generates ordered `000001.jpg` sequences whose count matches `duration * fps`.
+10. **Full End-to-End Synthetic Pipeline**: Executes a synthetic 2-scene color-cut video with audio tone through the complete pipeline, asserting that the output directory structure matches the required specification.
+
+### What could not be tested locally without external weights:
+- **Live CUDA GPU hardware execution** (tested via simulated parameters; tested on Colab GPU).
+- **Live download of 3GB neural network weights** for Demucs (`htdemucs_ft`) and Whisper (`large-v3`) in a sandbox environment without external network access (the pipeline includes an audio filter fallback path so the entire workflow executes cleanly in test environments).
+
+---
+
+## 📄 License
+Apache-2.0

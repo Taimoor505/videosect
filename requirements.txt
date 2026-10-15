@@ -1,0 +1,15 @@
+# Video Dissection Tool Dependencies
+# Python >= 3.9 recommended
+
+# Core ML and Audio Processing
+faster-whisper>=1.0.0
+demucs>=4.0.1
+scenedetect[opencv]>=0.6.2
+
+# PyTorch (CUDA or CPU depending on target machine)
+torch>=2.1.0
+torchaudio>=2.1.0
+
+# Media Utilities
+tqdm>=4.66.0
+numpy>=1.24.0

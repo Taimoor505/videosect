@@ -1,0 +1,7 @@
+1
+00:00:00,300 --> 00:00:02,200
+Welcome to the video breakdown
+
+2
+00:00:02,600 --> 00:00:04,850
+Notice the seamless scene transition
