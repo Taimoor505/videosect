@@ -278,8 +278,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </div>
 
             <p className="text-xs text-indigo-900/80 leading-relaxed">
-              Generates a native CapCut draft (<code className="font-mono text-indigo-950 font-medium">draft_content.json</code> + <code className="font-mono text-indigo-950 font-medium">draft_meta_info.json</code>).
-              When opened in CapCut, your video track will be pre-cut into silent scene shots, with isolated voice on audio track 1, background music on audio track 2, and synchronized subtitle captions!
+              Includes the default <code className="font-mono text-indigo-950 font-medium">capcut_ready/</code> bundle (numbered clips, isolated voice & music stems, SubRip captions, and manual assembly instructions), plus optional experimental CapCut draft (<code className="font-mono text-indigo-950 font-medium">draft_content.json</code>).
             </p>
 
             <div className="flex flex-wrap gap-4 pt-1">
@@ -290,7 +289,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   onChange={(e) => setIncludeCapCut(e.target.checked)}
                   className="rounded text-indigo-600 focus:ring-0 w-4 h-4"
                 />
-                <span>Include CapCut Draft (<code className="font-mono text-[11px]">draft_content.json</code>)</span>
+                <span>Include Experimental Draft (<code className="font-mono text-[11px]">draft_content.json</code>)</span>
               </label>
 
               <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-800">
@@ -300,18 +299,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   onChange={(e) => setIncludeXmlTimeline(e.target.checked)}
                   className="rounded text-indigo-600 focus:ring-0 w-4 h-4"
                 />
-                <span>Include Universal XML (<code className="font-mono text-[11px]">timeline.xml</code>)</span>
+                <span>Include NLE Timelines (<code className="font-mono text-[11px]">timeline_fcp7.xml, timeline.fcpxml</code>)</span>
               </label>
             </div>
 
             {/* Expandable Import Instructions */}
             {showCapCutGuide && (
               <div className="mt-3 p-3 bg-white rounded-lg border border-indigo-200 text-xs text-slate-700 space-y-2">
-                <div className="font-semibold text-slate-900">How to open in CapCut:</div>
+                <div className="font-semibold text-slate-900">How to assemble in CapCut or NLE:</div>
                 <div className="space-y-1 font-mono text-[11px] bg-slate-50 p-2 rounded">
-                  <div><strong>Windows:</strong> Extract into <code className="text-indigo-800">%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\</code></div>
-                  <div><strong>Mac:</strong> Extract into <code className="text-indigo-800">~/Movies/CapCut/User Data/Projects/com.lveditor.draft/</code></div>
-                  <div><strong>Universal / Premiere / Resolve:</strong> Import <code className="text-indigo-800">timeline.xml</code> via File → Import</div>
+                  <div><strong>CapCut (Desktop, Web, Mobile):</strong> Import <code className="text-indigo-800">capcut_ready/</code> folder. Drag clips to track 1, voice to audio 1, music to audio 2, and captions.srt to captions. (CapCut does not support XML import).</div>
+                  <div><strong>Experimental Draft Windows:</strong> Extract draft into <code className="text-indigo-800">%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft\</code></div>
+                  <div><strong>Experimental Draft Mac:</strong> Extract draft into <code className="text-indigo-800">~/Movies/CapCut/User Data/Projects/com.lveditor.draft/</code></div>
+                  <div><strong>Premiere / DaVinci Resolve / Final Cut:</strong> Import <code className="text-indigo-800">timeline_fcp7.xml</code> or <code className="text-indigo-800">timeline.fcpxml</code> via File → Import.</div>
                 </div>
               </div>
             )}

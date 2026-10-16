@@ -471,7 +471,7 @@ def get_video_info(video_path: Path) -> Dict[str, Any]:
             fps = rates["r_frame_rate"]
 
         if "avg_frame_rate" in rates and "r_frame_rate" in rates:
-            if abs(rates["avg_frame_rate"] - rates["r_frame_rate"]) > 0.5:
+            if abs(rates["avg_frame_rate"] - rates["r_frame_rate"]) > 0.05:
                 is_vfr = True
 
     return {
@@ -826,7 +826,8 @@ def separate_audio_stems(
     denoise: bool = False,
     loudnorm: bool = False,
     has_audio: bool = True,
-    duration: float = 1.0
+    duration: float = 1.0,
+    speech_gate: bool = True
 ) -> Tuple[Path, Path]:
     """
     Separate speech (`voice.wav`) from background music (`music.wav`).
@@ -845,12 +846,13 @@ def separate_audio_stems(
         return voice_wav, music_wav
 
     # Check if input audio is completely silent; if so, copy directly to save time and preserve exact silence
-    audio_stats = analyze_audio_speech_activity(audio_wav_path)
-    if audio_stats.get("is_silent", False):
-        print("[Audio Separation] Input audio track is silent; writing silent voice.wav and music.wav.")
-        shutil.copy2(audio_wav_path, voice_wav)
-        shutil.copy2(audio_wav_path, music_wav)
-        return voice_wav, music_wav
+    if speech_gate:
+        audio_stats = analyze_audio_speech_activity(audio_wav_path)
+        if audio_stats.get("is_silent", False):
+            print("[Audio Separation] Input audio track is silent; writing silent voice.wav and music.wav.")
+            shutil.copy2(audio_wav_path, voice_wav)
+            shutil.copy2(audio_wav_path, music_wav)
+            return voice_wav, music_wav
 
     sep_choice = separator_backend.strip().lower()
 
@@ -1092,11 +1094,12 @@ def transcribe_isolated_voice(
     language: Optional[str] = None,
     initial_prompt: Optional[str] = None,
     diarize: bool = False,
-    hf_token: Optional[str] = None
+    hf_token: Optional[str] = None,
+    speech_gate: bool = True
 ) -> Tuple[List[TranscriptSegment], Path, Path, Path]:
     """
     Transcribe `voice.wav` using faster-whisper with:
-    - Silence & music-only hallucination guards
+    - Silence & music-only hallucination guards (can be bypassed with speech_gate=False)
     - Optional `--align` (WhisperX forced alignment + missing-timestamp word interpolation)
     - Optional `--language`, `--initial-prompt`, and `--diarize` (graceful fallback without HF token)
     """
@@ -1114,14 +1117,16 @@ def transcribe_isolated_voice(
     alignment_used = "faster-whisper"
     diarization_used = False
 
-    if audio_activity.get("is_silent", False):
+    if speech_gate and audio_activity.get("is_silent", False):
         print(f"[Transcription] Vocal stem is silent ({audio_activity.get('rms_dbfs')} dBFS); skipping ASR to prevent hallucination.")
-    elif audio_activity.get("is_music_or_tone_only", False):
+    elif speech_gate and audio_activity.get("is_music_or_tone_only", False):
         print(
             f"[Transcription] Vocal stem contains only stationary tone/music "
             f"(envelope_cv={audio_activity.get('envelope_cv')}); skipping ASR to prevent hallucination."
         )
     else:
+        if not speech_gate:
+            print("[Transcription] Speech gate disabled (--no-speech-gate); proceeding with ASR directly.")
         faster_whisper_available = False
         try:
             from faster_whisper import WhisperModel  # noqa: F401
@@ -2472,7 +2477,8 @@ def dissect_video(
     cuts_from: Optional[str] = None,
     describe: bool = False,
     shot_type: bool = False,
-    ocr_subs: bool = False
+    ocr_subs: bool = False,
+    speech_gate: bool = True
 ) -> Path:
     """
     Main pipeline entry point with stage caching/resume (`--force` to recompute),
@@ -2550,18 +2556,25 @@ def dissect_video(
     stages_cached: List[str] = []
 
     # Stage 1: CFR Conformance (with stage caching)
-    conformed_video = temp_dir / f"{video_name}_cfr.mp4"
-    if not force and conformed_video.exists() and conformed_video.stat().st_size > 0:
-        print(f"[Cache] Reusing existing CFR video: {conformed_video.name}")
-        stages_cached.append("conform")
+    is_vfr = bool(probe_info.get("is_vfr", False))
+    need_conform = is_vfr or bool(wm_filter)
+
+    if need_conform:
+        conformed_video = temp_dir / f"{video_name}_cfr.mp4"
+        if not force and conformed_video.exists() and conformed_video.stat().st_size > 0:
+            print(f"[Cache] Reusing existing CFR video: {conformed_video.name}")
+            stages_cached.append("conform")
+        else:
+            conform_video_to_cfr(
+                input_file,
+                conformed_video,
+                target_fps=fps_to_use,
+                watermark_filter=wm_filter,
+                has_audio=has_audio
+            )
     else:
-        conform_video_to_cfr(
-            input_file,
-            conformed_video,
-            target_fps=fps_to_use,
-            watermark_filter=wm_filter,
-            has_audio=has_audio
-        )
+        print(f"[Conform] Input video is constant frame rate ({probe_info.get('fps', fps_to_use)} fps); using original file.")
+        conformed_video = input_file
 
     conformed_info = get_video_info(conformed_video)
     total_duration = conformed_info.get("duration", probe_info.get("duration", 0.0))
@@ -2585,7 +2598,8 @@ def dissect_video(
             denoise=denoise,
             loudnorm=loudnorm,
             has_audio=has_audio,
-            duration=total_duration
+            duration=total_duration,
+            speech_gate=speech_gate
         )
 
     # Stage 3: Speech Transcription (with stage caching)
@@ -2630,7 +2644,8 @@ def dissect_video(
             language=language,
             initial_prompt=initial_prompt,
             diarize=diarize,
-            hf_token=hf_token
+            hf_token=hf_token,
+            speech_gate=speech_gate
         )
 
     # Optional Phase 3.5: Burned-in Subtitle OCR (--ocr-subs)
@@ -2743,6 +2758,8 @@ def dissect_video(
         "height": v_height,
         "has_audio": has_audio,
         "is_vfr_source": bool(probe_info.get("is_vfr", False)),
+        "conformed_to_cfr": bool(need_conform),
+        "speech_gate": bool(speech_gate),
         "clip_count": len(scene_clips),
         "watermark_removed": wm_box,
         "frames_settings": {
@@ -2872,7 +2889,11 @@ def recut_project(
     conformed_video = temp_dir / "source_concat.mp4"
 
     if source_video and source_video.exists():
-        conform_video_to_cfr(source_video, conformed_video, target_fps=fps, has_audio=False)
+        src_info = get_video_info(source_video)
+        if src_info.get("is_vfr", False):
+            conform_video_to_cfr(source_video, conformed_video, target_fps=fps, has_audio=False)
+        else:
+            conformed_video = source_video
     else:
         existing_clips = sorted((project_dir / "clips").glob("clip_*.mp4"))
         if not existing_clips:
@@ -3339,6 +3360,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     parser.add_argument("--device", type=str, choices=["auto", "cuda", "cpu"], default="auto", help="Execution device: auto, cuda, or cpu")
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary scratch directory")
+    parser.add_argument("--no-speech-gate", action="store_true", help="Turn off the silence/music check (speech gate)")
 
     args = parser.parse_args(argv)
     export_list = [x.strip() for x in args.export.split(",") if x.strip()] if args.export else None
@@ -3374,6 +3396,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         describe=args.describe,
         shot_type=args.shot_type,
         ocr_subs=args.ocr_subs,
+        speech_gate=(not args.no_speech_gate),
     )
 
     try:

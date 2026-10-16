@@ -53,6 +53,18 @@ def run_ab_separation(
     }
 
     for backend in ("demucs", "roformer"):
+        if backend == "roformer":
+            has_audio_separator = False
+            try:
+                import audio_separator  # noqa: F401
+                has_audio_separator = True
+            except ImportError:
+                has_audio_separator = False
+
+            if not has_audio_separator:
+                print("[A/B Separate] audio-separator is not installed; skipping roformer model.")
+                continue
+
         sub_dir = output_dir / f"_tmp_{backend}"
         sub_dir.mkdir(parents=True, exist_ok=True)
         t0 = time.time()

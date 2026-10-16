@@ -20,10 +20,10 @@ export const ColabHub: React.FC = () => {
 !apt-get update -qq && apt-get install -y -qq ffmpeg
 !pip install -q faster-whisper demucs "scenedetect[opencv]" tqdm torch torchaudio
 
-# 2. Run Dissection (High-accuracy Ensemble Clipping + Auto Watermark Removal + Default CapCut Draft)
+# 2. Run Dissection (High-accuracy Ensemble Clipping + Auto Watermark Removal + CapCut Ready Export)
 !python3 dissect.py /content/input.mp4 --detector ensemble --threshold 27.0 --watermark auto
 
-# 3. Download Default CapCut Project ZIP & Full Dissected Output ZIP
+# 3. Download CapCut Ready Package ZIP & Full Dissected Output ZIP
 import shutil
 from google.colab import files
 files.download("./output/input/CapCut_Project_input.zip")
@@ -51,11 +51,11 @@ files.download("output_input.zip")`;
             Google Colab Notebook & CLI Hub
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Ready-to-run Jupyter notebook for Google Colab GPU runtime (exports & downloads a CapCut project by default), plus single-command CLI for CPU (AMD Ryzen 5600) and CUDA GPUs.
+            Ready-to-run Jupyter notebook for Google Colab GPU runtime (exports capcut_ready/ bundle by default), plus single-command CLI for CPU (AMD Ryzen 5600) and CUDA GPUs.
           </p>
         </div>
 
-        {/* 1-Click Notebook Download */}
+        {/* Quick Notebook Download */}
         <a
           href="/api/download/file/video_dissection.ipynb"
           download="video_dissection.ipynb"
@@ -166,7 +166,7 @@ files.download("output_input.zip")`;
                   className="rounded text-indigo-600 focus:ring-0 w-4 h-4"
                 />
                 <span className="text-xs text-slate-800 font-medium">
-                  Generate CapCut Project Bundle by default (<code className="font-mono bg-indigo-50 text-indigo-900 border border-indigo-200 px-1 py-0.5 rounded">capcut_project/</code> + <code className="font-mono bg-indigo-50 text-indigo-900 border border-indigo-200 px-1 py-0.5 rounded">CapCut_Project_*.zip</code>)
+                  Generate default CapCut Ready Bundle (<code className="font-mono bg-indigo-50 text-indigo-900 border border-indigo-200 px-1 py-0.5 rounded">capcut_ready/</code> + <code className="font-mono bg-indigo-50 text-indigo-900 border border-indigo-200 px-1 py-0.5 rounded">CapCut_Project_*.zip</code>)
                 </span>
               </label>
 

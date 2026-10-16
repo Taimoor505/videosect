@@ -21,6 +21,31 @@ import benchmark_detectors
 import capcut_generator
 import dissect
 
+# Optional dependency detection for test skipping
+try:
+    import rapidocr_onnxruntime  # noqa: F401
+    HAS_RAPIDOCR = True
+except ImportError:
+    HAS_RAPIDOCR = False
+
+try:
+    import audio_separator  # noqa: F401
+    HAS_AUDIO_SEPARATOR = True
+except ImportError:
+    HAS_AUDIO_SEPARATOR = False
+
+try:
+    import whisperx  # noqa: F401
+    HAS_WHISPERX = True
+except ImportError:
+    HAS_WHISPERX = False
+
+try:
+    import transnetv2_pytorch  # noqa: F401
+    HAS_TRANSNET = True
+except ImportError:
+    HAS_TRANSNET = False
+
 
 def generate_synthetic_video(
     out_path: Path,
@@ -363,24 +388,27 @@ class TestPhase2AndPhase3Features(unittest.TestCase):
 
     def test_08_ab_separate_and_ocr_subs_and_batch_mode(self):
         """Phase 2.4, 3.5 & 3.6: Test ab_separate.py, --ocr-subs, and batch folder mode."""
-        # 1. A/B voice separation
+        # 1. A/B voice separation (Demucs core, Roformer optional)
         ab_dir = self.tmp_root / "ab_out"
         ab_rep = ab_separate.run_ab_separation(self.std_video, ab_dir, fast=True)
         self.assertTrue((ab_dir / "voice_demucs.wav").exists())
-        self.assertTrue((ab_dir / "voice_roformer.wav").exists())
         self.assertIn("demucs", ab_rep["models"])
+        if HAS_AUDIO_SEPARATOR:
+            self.assertTrue((ab_dir / "voice_roformer.wav").exists())
+            self.assertIn("roformer", ab_rep["models"])
 
-        # 2. Burned-in subtitle OCR (--ocr-subs)
-        sub_vid = generate_synthetic_video(self.tmp_root / "subtitled.mp4", mode="subtitled")
-        ocr_json, ocr_srt = dissect.detect_and_ocr_burned_subtitles(
-            sub_vid, self.tmp_root / "ocr_out", sample_interval_sec=0.5
-        )
-        self.assertIsNotNone(ocr_json)
-        self.assertTrue(ocr_json.exists())
-        ocr_data = json.loads(ocr_json.read_text(encoding="utf-8"))
-        self.assertFalse(ocr_data["video_modified"])
-        self.assertGreaterEqual(ocr_data["subtitle_count"], 1)
-        self.assertIn("HELLO", ocr_data["subtitles"][0]["text"].upper())
+        # 2. Burned-in subtitle OCR (--ocr-subs, skipped if rapidocr-onnxruntime missing)
+        if HAS_RAPIDOCR:
+            sub_vid = generate_synthetic_video(self.tmp_root / "subtitled.mp4", mode="subtitled")
+            ocr_json, ocr_srt = dissect.detect_and_ocr_burned_subtitles(
+                sub_vid, self.tmp_root / "ocr_out", sample_interval_sec=0.5
+            )
+            self.assertIsNotNone(ocr_json)
+            self.assertTrue(ocr_json.exists())
+            ocr_data = json.loads(ocr_json.read_text(encoding="utf-8"))
+            self.assertFalse(ocr_data["video_modified"])
+            self.assertGreaterEqual(ocr_data["subtitle_count"], 1)
+            self.assertIn("HELLO", ocr_data["subtitles"][0]["text"].upper())
 
         # 3. Batch mode folder processing + summary.csv
         batch_in = self.tmp_root / "batch_videos"
@@ -395,6 +423,101 @@ class TestPhase2AndPhase3Features(unittest.TestCase):
             rows = list(csv.DictReader(f))
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "success")
+
+    def test_09_ocr_subtitles(self):
+        """Optional feature: Burned-in subtitle detection & OCR (--ocr-subs)."""
+        if not HAS_RAPIDOCR:
+            self.skipTest("rapidocr-onnxruntime not installed; skipping --ocr-subs test.")
+        sub_vid = generate_synthetic_video(self.tmp_root / "subtitled_opt.mp4", mode="subtitled")
+        ocr_json, ocr_srt = dissect.detect_and_ocr_burned_subtitles(
+            sub_vid, self.tmp_root / "ocr_opt_out", sample_interval_sec=0.5
+        )
+        self.assertIsNotNone(ocr_json)
+        self.assertTrue(ocr_json.exists())
+        ocr_data = json.loads(ocr_json.read_text(encoding="utf-8"))
+        self.assertFalse(ocr_data["video_modified"])
+        self.assertGreaterEqual(ocr_data["subtitle_count"], 1)
+        self.assertIn("HELLO", ocr_data["subtitles"][0]["text"].upper())
+
+    def test_10_whisperx_alignment(self):
+        """Optional feature: WhisperX forced phoneme alignment (--align)."""
+        if not HAS_WHISPERX:
+            self.skipTest("whisperx not installed; skipping WhisperX alignment test.")
+        v_wav = self.tmp_root / "wx_voice.wav"
+        dissect.generate_silent_wav(v_wav, duration=1.0)
+        segs, _, _, _ = dissect.transcribe_isolated_voice(
+            voice_wav_path=v_wav,
+            output_transcript_dir=self.tmp_root / "wx_opt_out",
+            align=True,
+            fast=True
+        )
+        self.assertIsNotNone(segs)
+
+    def test_11_transnetv2_detector(self):
+        """Optional feature: TransNetV2 3D-CNN shot detector (--detector transnet)."""
+        if not HAS_TRANSNET:
+            self.skipTest("transnetv2-pytorch not installed; skipping TransNetV2 detector test.")
+        scenes = dissect.detect_scenes(
+            self.std_video, total_duration=2.0, detector_mode="transnet"
+        )
+        self.assertGreaterEqual(len(scenes), 1)
+
+    def test_12_roformer_separation(self):
+        """Optional feature: BS-RoFormer vocal separation via audio-separator (--separator roformer)."""
+        if not HAS_AUDIO_SEPARATOR:
+            self.skipTest("audio-separator not installed; skipping Roformer test.")
+        ab_dir = self.tmp_root / "ab_opt_roformer"
+        ab_rep = ab_separate.run_ab_separation(self.std_video, ab_dir, fast=True)
+        self.assertTrue((ab_dir / "voice_roformer.wav").exists())
+        self.assertIn("roformer", ab_rep["models"])
+
+    def test_13_ab_separate_missing_roformer_handling(self):
+        """Verify ab_separate does not write voice_roformer.wav via fallback when audio-separator is missing."""
+        if HAS_AUDIO_SEPARATOR:
+            self.skipTest("audio-separator is installed; skipping missing package test.")
+        ab_dir = self.tmp_root / "ab_missing_roformer"
+        ab_rep = ab_separate.run_ab_separation(self.std_video, ab_dir, fast=True)
+        self.assertTrue((ab_dir / "voice_demucs.wav").exists())
+        self.assertFalse((ab_dir / "voice_roformer.wav").exists())
+        self.assertIn("demucs", ab_rep["models"])
+        self.assertNotIn("roformer", ab_rep["models"])
+
+    def test_14_cfr_input_not_reencoded(self):
+        """Verify that a constant frame rate (CFR) input is not re-encoded to _cfr.mp4."""
+        out_cfr = self.tmp_root / "out_cfr_check"
+        proj_dir = dissect.dissect_video(
+            video_path=str(self.std_video),
+            output_dir=str(out_cfr),
+            fast=True,
+            keep_temp=True,
+            force=True
+        )
+        sc = json.loads((proj_dir / "scenes.json").read_text(encoding="utf-8"))
+        self.assertFalse(sc.get("is_vfr_source", True))
+        self.assertFalse(sc.get("conformed_to_cfr", True))
+        # Ensure _temp does not contain _cfr.mp4
+        cfr_mp4 = proj_dir / "_temp" / f"{self.std_video.stem}_cfr.mp4"
+        self.assertFalse(cfr_mp4.exists())
+
+    def test_15_no_speech_gate_flag(self):
+        """Verify --no-speech-gate bypasses silence and music-tone checks during transcription."""
+        # music_only video has steady tone that speech-gate usually skips
+        mus_vid = generate_synthetic_video(self.tmp_root / "gate_music.mp4", mode="music_only")
+        out_gated = dissect.dissect_video(
+            str(mus_vid), str(self.tmp_root / "out_gated"),
+            fast=True, speech_gate=True, force=True
+        )
+        tr_gated = json.loads((out_gated / "transcript" / "transcript.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(tr_gated["segments"]), 0)
+
+        # With speech_gate=False, transcription runs without being dropped by the gate
+        out_ungated = dissect.dissect_video(
+            str(mus_vid), str(self.tmp_root / "out_ungated"),
+            fast=True, speech_gate=False, force=True
+        )
+        sc_ungated = json.loads((out_ungated / "scenes.json").read_text(encoding="utf-8"))
+        self.assertFalse(sc_ungated.get("speech_gate", True))
+        self.assertTrue((out_ungated / "transcript" / "transcript.json").exists())
 
 
 if __name__ == "__main__":

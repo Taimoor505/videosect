@@ -35,7 +35,7 @@ export const TestSuiteModal: React.FC = () => {
     { name: 'test_explicit_cpu & cuda detection', desc: 'Validates int8 compute for CPU and float16 for CUDA' },
     { name: 'test_capcut_draft_content_schema', desc: 'Validates CapCut draft_content.json 4-track schema (video, voice, music, text captions)' },
     { name: 'test_capcut_meta_info', desc: 'Validates CapCut draft_meta_info.json project metadata and microsecond timings' },
-    { name: 'test_universal_fcpxml_structure', desc: 'Tests universal XML timeline for CapCut, Premiere, Resolve, and Final Cut Pro' },
+    { name: 'test_universal_fcpxml_structure', desc: 'Tests OpenTimelineIO XML/EDL timeline exports for Premiere, Resolve, and Final Cut Pro' },
     { name: 'test_synthetic_video_probe', desc: 'Probes synthetic video duration, resolution, and fps via FFmpeg' },
     { name: 'test_full_pipeline_synthetic_run', desc: 'Full pipeline run: CFR conform, vocal isolation, silent clips (-an), frames, scenes.json' },
   ];
